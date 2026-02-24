@@ -1,0 +1,245 @@
+<div align="center">
+
+# ⚡ fastapi-flare
+
+**Plug-and-play error tracking & log visualization for FastAPI.**  
+Backed by **Redis Streams** — no database, no SaaS, no overhead.
+
+<br/>
+
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Redis](https://img.shields.io/badge/Redis-Streams-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+
+<br/>
+
+<img src="assets/foto.png" alt="fastapi-flare dashboard preview" width="90%" style="border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.4);" />
+
+</div>
+
+---
+
+## What is fastapi-flare?
+
+`fastapi-flare` is a **self-hosted error tracking library** for FastAPI applications. It automatically captures HTTP and unhandled exceptions, stores them in Redis Streams, and exposes a beautiful dark-theme dashboard — all with a single line of code.
+
+No external services. No configuration files. No noise.
+
+---
+
+## Features
+
+| | |
+|---|---|
+| 🚀 **One-line setup** | `setup(app)` and you're done |
+| 🔍 **Auto-capture** | HTTP 4xx/5xx and unhandled Python exceptions |
+| 🖥️ **Admin dashboard** | Built-in at `/flare` — dark theme, filters, pagination |
+| 🗄️ **Redis-only** | Buffer queue (List) + durable storage (Stream) |
+| 🔥 **Fire-and-forget** | Logging never blocks or affects your request handlers |
+| ⚙️ **Background worker** | Async task drains queue to stream every 5 seconds |
+| 🕒 **Retention policies** | Time-based (default 7 days) + count-based (10k entries) |
+| 🔐 **Auth-ready** | Protect the dashboard with any FastAPI `Depends()` |
+| 🌍 **Env-configurable** | All settings available as `FLARE_*` environment variables |
+
+---
+
+## Installation
+
+```bash
+pip install fastapi-flare
+```
+
+> **Requirements:** Python 3.11+, FastAPI, and a running Redis instance.
+
+---
+
+## Quick Start
+
+```python
+from fastapi import FastAPI
+from fastapi_flare import setup
+
+app = FastAPI()
+setup(app, redis_url="redis://localhost:6379")
+```
+
+That's it. Visit **`http://localhost:8000/flare`** to open the error dashboard.
+
+---
+
+## Full Configuration
+
+```python
+from fastapi_flare import setup, FlareConfig
+
+setup(app, config=FlareConfig(
+    redis_url="redis://localhost:6379",
+    redis_password=None,
+
+    # Storage
+    stream_key="flare:logs",          # Redis Stream key
+    queue_key="flare:queue",          # Redis List buffer key
+    max_entries=10_000,               # Count-based cap (MAXLEN)
+    retention_hours=168,              # Time-based retention (7 days)
+
+    # Dashboard
+    dashboard_path="/flare",
+    dashboard_title="My App — Errors",
+    dashboard_auth_dependency=None,   # e.g. Depends(verify_token)
+
+    # Worker
+    worker_interval_seconds=5,
+    worker_batch_size=100,
+))
+```
+
+### Environment Variables
+
+All options can be set via `FLARE_*` env vars — no code changes needed:
+
+```bash
+FLARE_REDIS_URL=redis://myhost:6379
+FLARE_RETENTION_HOURS=72
+FLARE_DASHBOARD_PATH=/errors
+FLARE_DASHBOARD_TITLE="Production Errors"
+```
+
+---
+
+## Dashboard
+
+The built-in dashboard gives you full visibility into your application errors without leaving your infrastructure.
+
+| Feature | Detail |
+|---|---|
+| **URL** | `{dashboard_path}` (default `/flare`) |
+| **Stats cards** | Errors/Warnings in last 24h, total entries, latest error time |
+| **Filters** | Level (ERROR / WARNING), event name, full-text search |
+| **Table** | Timestamp, level badge, event, message, endpoint, HTTP status |
+| **Detail modal** | Full message, error, stack trace, request metadata, context JSON |
+| **Auto-refresh** | 30s polling toggle |
+
+---
+
+## Redis Data Model
+
+`fastapi-flare` uses two Redis structures:
+
+| Key | Type | Purpose |
+|---|---|---|
+| `flare:queue` | **List** | Incoming buffer — `LPUSH` by handlers, `RPOP` by worker |
+| `flare:logs` | **Stream** | Durable time-ordered storage — `XADD` / `XREVRANGE` |
+
+Stream entries are automatically trimmed by two policies applied on every worker cycle:
+
+1. **Count-based** — `MAXLEN ~` keeps at most `max_entries` items
+2. **Time-based** — `XTRIM MINID` removes entries older than `retention_hours`
+
+---
+
+## Log Entry Schema
+
+Every captured error is stored as a structured `FlareLogEntry`:
+
+```python
+class FlareLogEntry(BaseModel):
+    id: str                    # Redis Stream entry ID (millisecond-precise)
+    timestamp: datetime
+    level: Literal["ERROR", "WARNING"]
+    event: str                 # e.g. "http_exception", "unhandled_exception"
+    message: str
+    request_id: str | None     # UUID from X-Request-ID header
+    endpoint: str | None
+    http_method: str | None
+    http_status: int | None
+    ip_address: str | None
+    duration_ms: int | None
+    error: str | None
+    stack_trace: str | None
+    context: dict | None       # Additional structured data
+```
+
+---
+
+## Manual Logging
+
+You can push custom log entries from anywhere in your application:
+
+```python
+from fastapi_flare.queue import push_log
+
+await push_log(
+    config,
+    level="ERROR",
+    event="payment_failed",
+    message="Stripe charge declined",
+    context={"order_id": "ord_123", "amount": 2500},
+)
+```
+
+---
+
+## Protecting the Dashboard
+
+Secure the dashboard using any FastAPI dependency:
+
+```python
+from fastapi import HTTPException, Security
+from fastapi.security import HTTPBearer
+
+bearer = HTTPBearer()
+
+def verify_token(token=Security(bearer)):
+    if token.credentials != "my-secret":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+setup(app, config=FlareConfig(
+    redis_url="redis://localhost:6379",
+    dashboard_auth_dependency=verify_token,
+))
+```
+
+---
+
+## Running the Example
+
+```bash
+# 1. Copy and configure environment
+cp .env.example .env
+
+# 2. Start Redis (Docker)
+docker run -d -p 6379:6379 redis:7
+
+# 3. Run the example app
+poetry run uvicorn examples.example:app --reload --port 8000
+```
+
+**Test routes:**
+
+| Route | Behavior |
+|---|---|
+| `GET /` | Returns 200 OK |
+| `GET /boom` | Triggers `RuntimeError` → captured as ERROR |
+| `GET /items/999` | Triggers `HTTPException 404` → captured as WARNING |
+| `GET /flare` | Opens the error dashboard |
+
+---
+
+## Comparison
+
+| Project | What it does |
+|---|---|
+| `sentry-sdk` | Full error tracking SaaS — more features, external dependency |
+| `fastapi-analytics` | Endpoint analytics / performance — not error-focused |
+| `fastapi-middleware-logger` | HTTP logging only, no storage or dashboard |
+| `api-watch` | Real-time monitoring, Flask/FastAPI |
+| **`fastapi-flare`** | **Self-hosted, zero-config error visibility — no external services** |
+
+`fastapi-flare` is for teams that want **local, observable, production-ready error tracking** without the overhead of a full observability platform.
+
+---
+
+## License
+
+MIT © [Gabriel](mailto:ondarks360@gmail.com)

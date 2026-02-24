@@ -1,0 +1,26 @@
+[project]
+name = "fast-api-error"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Gabriel",email = "ondarks360@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi (>=0.104.0)",
+    "redis (>=5.0.0)",
+    "pydantic (>=2.4.0)",
+    "pydantic-settings (>=2.0.0)",
+    "starlette (>=0.27.0)",
+    "scalar-fastapi (>=1.6.2,<2.0.0)",
+    "uvicorn[standard] (>=0.41.0,<0.42.0)"
+]
+
+
+[tool.poetry]
+packages = [{include = "fastapi_flare", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
