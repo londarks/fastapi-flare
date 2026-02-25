@@ -127,10 +127,13 @@ def make_router(config) -> APIRouter:
 
         @router.get("/auth/login")
         async def auth_login(request: Request, return_to: str = _errors_path):
-            """Gera PKCE challenge, salva na sessão e redireciona para o Zitadel."""
+            """Gera PKCE challenge, salva em cookie assinado e redireciona para o Zitadel."""
             # Já autenticado? vai direto pro destino
             if _session_valid(request):
                 return RedirectResponse(url=return_to, status_code=302)
+
+            import json as _json
+            from itsdangerous import URLSafeTimedSerializer as _Signer
 
             verifier  = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
             challenge = (
@@ -139,9 +142,10 @@ def make_router(config) -> APIRouter:
             )
             state = secrets.token_urlsafe(32)
 
-            request.session["code_verifier"] = verifier
-            request.session["state"]         = state
-            request.session["return_to"]     = return_to
+            # Assina o payload PKCE num cookie dedicado — independente do SessionMiddleware
+            _secret = config.zitadel_session_secret or secrets.token_hex(32)
+            signer  = _Signer(_secret, salt="flare-pkce")
+            pkce_token = signer.dumps({"v": verifier, "s": state, "r": return_to})
 
             params = {
                 "client_id":             _client_id,
@@ -153,7 +157,16 @@ def make_router(config) -> APIRouter:
                 "code_challenge_method": "S256",
             }
             auth_url = f"https://{_domain}/oauth/v2/authorize?{urlencode(params)}"
-            return RedirectResponse(url=auth_url, status_code=302)
+            response = RedirectResponse(url=auth_url, status_code=302)
+            response.set_cookie(
+                "flare_pkce",
+                pkce_token,
+                httponly=True,
+                secure=_secure,
+                samesite="lax",
+                max_age=600,  # 10 minutos — tempo suficiente para o login
+            )
+            return response
 
         # -- Auth: Logout -----------------------------------------------------
 
@@ -254,18 +267,27 @@ def make_router(config) -> APIRouter:
 
 
 def make_callback_router(config) -> APIRouter:
-    """Router sem prefix para o callback OAuth2 — path extraído de zitadel_redirect_uri."""
+    """Router sem prefix para o callback OAuth2 — path extraído de zitadel_redirect_uri.
+
+    O state/verifier PKCE são armazenados num cookie assinado dedicado (flare_pkce),
+    não no request.session — evita conflito quando a app já tem seu próprio SessionMiddleware.
+    """
     from datetime import datetime, timedelta
     from urllib.parse import urlparse
+    from itsdangerous import (
+        URLSafeTimedSerializer as _Signer,
+        BadSignature as _BadSig,
+        SignatureExpired as _Expired,
+    )
     from fastapi_flare.zitadel import exchange_zitadel_code
 
-    _domain       = config.zitadel_domain
-    _client_id    = config.zitadel_client_id
-    _redirect_uri = config.zitadel_redirect_uri
-    _errors_path  = config.dashboard_path
-
-    # Extrai só o path da URI (ex: "http://localhost:8002/auth/callback" → "/auth/callback")
+    _domain        = config.zitadel_domain
+    _client_id     = config.zitadel_client_id
+    _redirect_uri  = config.zitadel_redirect_uri
+    _errors_path   = config.dashboard_path
+    _secure        = _redirect_uri.startswith("https")
     _callback_path = urlparse(_redirect_uri).path
+    _secret        = config.zitadel_session_secret or secrets.token_hex(32)
 
     callback_router = APIRouter(include_in_schema=False)
 
@@ -276,22 +298,33 @@ def make_callback_router(config) -> APIRouter:
         state: Optional[str] = Query(None),
         error: Optional[str] = Query(None),
     ):
-        """Recebe o code do Zitadel, troca por token, busca userinfo e cria sessão."""
+        """Receives the code from Zitadel, exchanges it for a token, and creates the session."""
         if error:
-            raise HTTPException(status_code=400, detail=f"Erro na autenticação: {error}")
+            raise HTTPException(status_code=400, detail=f"Authentication error: {error}")
         if not code:
-            raise HTTPException(status_code=400, detail="Authorization code não fornecido")
+            raise HTTPException(status_code=400, detail="Authorization code not provided")
 
-        saved_state = request.session.get("state")
-        if not saved_state or saved_state != state:
-            raise HTTPException(status_code=400, detail="State inválido — possível ataque CSRF")
-
-        verifier = request.session.get("code_verifier")
-        if not verifier:
+        # Read and verify the dedicated PKCE signed cookie
+        pkce_cookie = request.cookies.get("flare_pkce")
+        if not pkce_cookie:
             raise HTTPException(
                 status_code=400,
-                detail="Code verifier não encontrado na sessão. Tente fazer login novamente.",
+                detail="PKCE state cookie missing. Please try logging in again.",
             )
+
+        signer = _Signer(_secret, salt="flare-pkce")
+        try:
+            pkce_data = signer.loads(pkce_cookie, max_age=600)
+        except _Expired:
+            raise HTTPException(status_code=400, detail="Login session expired. Please try again.")
+        except _BadSig:
+            raise HTTPException(status_code=400, detail="Invalid PKCE state — possible CSRF attack.")
+
+        if pkce_data.get("s") != state:
+            raise HTTPException(status_code=400, detail="State mismatch — possible CSRF attack.")
+
+        verifier  = pkce_data["v"]
+        return_to = pkce_data.get("r", _errors_path)
 
         access_token = await exchange_zitadel_code(
             domain=_domain,
@@ -303,8 +336,8 @@ def make_callback_router(config) -> APIRouter:
 
         try:
             import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=15.0) as _client:
-                ui_resp = await _client.get(
+            async with _httpx.AsyncClient(timeout=15.0) as _hclient:
+                ui_resp = await _hclient.get(
                     f"https://{_domain}/oidc/v1/userinfo",
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
@@ -326,11 +359,10 @@ def make_callback_router(config) -> APIRouter:
         }
         expires_at = datetime.utcnow() + timedelta(hours=1)
         request.session["expires_at"] = expires_at.isoformat()
-        request.session.pop("code_verifier", None)
-        request.session.pop("state", None)
 
-        return_to = request.session.pop("return_to", _errors_path)
-        return RedirectResponse(url=return_to, status_code=302)
+        response = RedirectResponse(url=return_to, status_code=302)
+        response.delete_cookie("flare_pkce")
+        return response
 
     return callback_router
 
