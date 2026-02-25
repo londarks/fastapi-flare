@@ -48,6 +48,7 @@ async def _get_client(config: "FlareConfig") -> Any:
         if config.redis_url:
             client = aioredis.from_url(
                 config.redis_url,
+                password=config.redis_password or None,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_connect_timeout=3,

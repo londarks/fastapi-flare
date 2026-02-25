@@ -1,6 +1,6 @@
 [project]
 name = "fastapi-flare"
-version = "0.1.3"
+version = "0.1.4"
 description = "Lightweight self-hosted observability for FastAPI."
 authors = [
     {name = "Gabriel",email = "ondarks360@gmail.com"}
