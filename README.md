@@ -240,6 +240,25 @@ poetry run uvicorn examples.example:app --reload --port 8000
 
 ---
 
+## Why not Sentry?
+
+Sentry is a great product — but it comes with trade-offs that not every team wants to accept.
+
+| | fastapi-flare | Sentry |
+|---|---|---|
+| **Hosting** | Self-hosted, your infra | External SaaS |
+| **Account required** | No | Yes |
+| **Infrastructure** | Redis only | Kafka, ClickHouse, Postgres, … |
+| **Cost** | Zero | Free tier → paid plans |
+| **Privacy** | Data never leaves your server | Data sent to third-party |
+| **Setup** | One `setup(app)` call | SDK + DSN + account config |
+| **Customization** | Full source access | Configuration only |
+
+`fastapi-flare` is the right choice when you need **fast, private, zero-dependency error visibility** — especially in self-hosted, air-gapped, or cost-sensitive environments.  
+For large-scale teams who need release tracking, performance monitoring, and team workflows, Sentry remains the better fit.
+
+---
+
 ## License
 
 MIT © [Gabriel](mailto:ondarks360@gmail.com)
