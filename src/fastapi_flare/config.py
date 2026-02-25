@@ -58,10 +58,23 @@ class FlareConfig(BaseSettings):
     storage_backend: Literal["redis", "sqlite"] = "redis"
     sqlite_path: str = "flare.db"
 
+    # ── Metrics ──────────────────────────────────────────────────────────────
+    # Maximum number of distinct endpoint keys held in the in-memory metrics
+    # store. Once reached, new unknown endpoints are silently dropped to
+    # prevent unbounded memory growth from scanners / URL enumeration attacks.
+    metrics_max_endpoints: int = 500
+
+    # ── Request body capture ─────────────────────────────────────────────────
+    # Maximum bytes to read and store from the request body on error events.
+    # Set to 0 to disable body capture entirely.
+    max_request_body_bytes: int = 8192
+
     # ── Runtime — set by setup(), never from env ────────────────────────────────
     # The resolved storage instance; injected after make_storage() in setup().
     # Excluded from serialization and env-loading.
     storage_instance: Optional[Any] = Field(default=None, exclude=True)
+    # In-memory metrics aggregator; injected by setup().
+    metrics_instance: Optional[Any] = Field(default=None, exclude=True)
     # ── Zitadel OAuth2 authentication (optional) ─────────────────────────────
     # When zitadel_domain + zitadel_client_id + zitadel_project_id are set,
     # setup() will automatically protect the /flare dashboard with JWT validation.

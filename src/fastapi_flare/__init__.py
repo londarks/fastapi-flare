@@ -59,7 +59,8 @@ from fastapi import FastAPI
 from fastapi.exceptions import HTTPException
 
 from fastapi_flare.config import FlareConfig
-from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareStats
+from fastapi_flare.metrics import FlareMetrics
+from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareMetricsSnapshot, FlareStats
 from fastapi_flare.zitadel import (
     clear_jwks_cache,
     make_zitadel_dependency,
@@ -69,9 +70,11 @@ from fastapi_flare.zitadel import (
 __all__ = [
     "setup",
     "FlareConfig",
+    "FlareMetrics",
     "FlareLogEntry",
     "FlareLogPage",
     "FlareStats",
+    "FlareMetricsSnapshot",
     # Zitadel auth helpers
     "make_zitadel_dependency",
     "verify_zitadel_token",
@@ -120,7 +123,8 @@ def setup(
     # ── Instantiate storage backend ────────────────────────────────────
     from fastapi_flare.storage import make_storage
     config.storage_instance = make_storage(config)
-
+    # ── Instantiate in-memory metrics aggregator ──────────────────────────
+    config.metrics_instance = FlareMetrics(max_endpoints=config.metrics_max_endpoints)
     # ── Auto-wire Zitadel auth dependency ────────────────────────────────────
     # Activated when the three required Zitadel fields are present AND the user
     # has not already supplied a custom dashboard_auth_dependency.
@@ -145,13 +149,23 @@ def setup(
             extra_audiences=extra or None,
         )
 
-    from fastapi_flare.handlers import make_generic_exception_handler, make_http_exception_handler
-    from fastapi_flare.middleware import RequestIdMiddleware
+    from fastapi_flare.handlers import (
+        make_generic_exception_handler,
+        make_http_exception_handler,
+        make_validation_exception_handler,
+    )
+    from fastapi.exceptions import RequestValidationError
+    from fastapi_flare.middleware import MetricsMiddleware, RequestIdMiddleware
     from fastapi_flare.router import make_router
     from fastapi_flare.worker import FlareWorker
 
+    # Middleware stack (last add_middleware runs outermost = first on request):
+    #   RequestIdMiddleware  → outermost (sets request_id + start_time)
+    #   MetricsMiddleware    → inner (reads start_time after response)
+    app.add_middleware(MetricsMiddleware, config=config)
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(HTTPException, make_http_exception_handler(config))
+    app.add_exception_handler(RequestValidationError, make_validation_exception_handler(config))
     app.add_exception_handler(Exception, make_generic_exception_handler(config))
     app.include_router(make_router(config))
 

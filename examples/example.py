@@ -1,35 +1,30 @@
 """
-fastapi-flare — example app (backend: SQLite).
-
-Nenhuma dependência externa necessária — os logs são gravados em
-``flare_example.db`` (SQLite) na pasta de trabalho atual.
+fastapi-flare — example app (backend: Redis or SQLite).
 
 Para rodar::
 
-    poetry run uvicorn examples.example:app --reload --port 8000
+    poetry run uvicorn examples.example:app --reload --port 8001
 
-Para rodar com Zitadel (dashboard protegido)::
+Rotas disponíveis::
 
-    # 1. Crie um .env com as variáveis Zitadel:
-    #    FLARE_ZITADEL_DOMAIN=auth.mycompany.com
-    #    FLARE_ZITADEL_CLIENT_ID=<your-client-id>
-    #    FLARE_ZITADEL_PROJECT_ID=<your-project-id>
-    #
-    # 2. Rode normalmente:
-    #    poetry run uvicorn examples.example:app --reload --port 8000
-
-Rotas de teste::
-
-    GET  /            → health check
-    GET  /boom        → dispara RuntimeError  (ERROR no dashboard)
-    GET  /items/999   → dispara HTTPException 404 (WARNING no dashboard)
-    GET  /flare       → dashboard de erros (protegido se Zitadel estiver configurado)
-    GET  /docs        → Scalar API reference
+    GET    /                       → health check
+    GET    /items/{item_id}        → 404 se id > 100 (WARNING)
+    GET    /boom                   → RuntimeError 500 (ERROR)
+    GET    /admin                  → 403 Forbidden (WARNING)
+    POST   /users                  → cria user — 422 se body inválido, 409 se já existe
+    POST   /orders                 → cria pedido — 400/401/404
+    POST   /payments               → pagamento — 402/422/500
+    DELETE /items/{item_id}        → 404 se não existe (WARNING)
+    GET    /flare                  → dashboard de erros
+    GET    /flare/metrics          → dashboard de métricas
+    GET    /docs                   → Scalar API reference
 """
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from scalar_fastapi import Theme, get_scalar_api_reference
+from typing import Optional
 
 from fastapi_flare import FlareConfig, setup
 
@@ -60,10 +55,10 @@ app = FastAPI(title="fastapi-flare example", docs_url=None, redoc_url=None)
 #
 
 # --- SQLite (sem Redis) ---
-config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
+# config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
 
 # --- Redis (produção) ---
-# config = FlareConfig(storage_backend="redis")  # lê FLARE_REDIS_URL do .env
+config = FlareConfig(storage_backend="redis")  # lê FLARE_REDIS_URL do .env
 
 setup(app, config=config)
 
@@ -77,6 +72,44 @@ async def scalar_docs() -> HTMLResponse:
         title=app.title,
         theme=Theme.DEEP_SPACE,
     )
+
+
+# ── In-memory fake databases ────────────────────────────────────────────────────
+
+_USERS: dict[int, dict] = {
+    1: {"id": 1, "username": "alice", "email": "alice@example.com"},
+    2: {"id": 2, "username": "bob",   "email": "bob@example.com"},
+}
+_ORDERS: dict[int, dict] = {
+    100: {"id": 100, "user_id": 1, "product": "Laptop", "total": 1500.00},
+}
+_PAID_ORDERS: set[int] = set()
+_NEXT_USER_ID = 3
+_NEXT_ORDER_ID = 101
+
+VALID_COUPONS: set[str] = {"SAVE10", "FLARE20"}
+ADMIN_TOKEN = "secret-admin-token"
+
+
+# ── Pydantic schemas ─────────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    email: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$")
+    age: Optional[int] = Field(None, ge=0, le=150)
+
+
+class OrderCreate(BaseModel):
+    user_id: int
+    product: str = Field(..., min_length=1)
+    quantity: int = Field(1, ge=1, le=100)
+    coupon: Optional[str] = None
+
+
+class PaymentCreate(BaseModel):
+    order_id: int
+    amount: float = Field(..., gt=0)
+    method: str = Field(..., pattern=r"^(credit|debit|pix)$")
 
 
 # ── Rotas de teste ──────────────────────────────────────────────────────────────
@@ -98,16 +131,116 @@ async def root():
 
 @app.get("/items/{item_id}")
 async def get_item(item_id: int):
-    """Retorna um item. IDs acima de 100 resultam em 404 (WARNING no dashboard)."""
+    """Retorna um item. IDs acima de 100 resultam em 404."""
     if item_id > 100:
         raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
     return {"item_id": item_id, "name": f"Item #{item_id}"}
 
 
+@app.delete("/items/{item_id}")
+async def delete_item(item_id: int):
+    """Deleta item. IDs acima de 100 não existem → 404."""
+    if item_id > 100:
+        raise HTTPException(status_code=404, detail=f"Item {item_id} not found — cannot delete")
+    return {"deleted": item_id}
+
+
+@app.get("/admin")
+async def admin(x_admin_token: Optional[str] = Header(default=None)):
+    """Rota protegida — exige header X-Admin-Token correto → 403 caso contrário."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden — invalid or missing X-Admin-Token")
+    return {"message": "Welcome, admin!", "users": len(_USERS), "orders": len(_ORDERS)}
+
+
 @app.get("/boom")
 async def boom():
-    """Dispara RuntimeError para testar captura de erros não tratados (ERROR no dashboard)."""
+    """Dispara RuntimeError — testa captura de exceções não tratadas (500 ERROR)."""
     raise RuntimeError("Test exception from /boom")
+
+
+# ── POST /users ──────────────────────────────────────────────────────────────────
+
+@app.post("/users", status_code=201)
+async def create_user(body: UserCreate):
+    """
+    Cria um novo usuário.
+    - 422 se body inválido (Pydantic validation)
+    - 409 se username já existe
+    """
+    global _NEXT_USER_ID
+    if any(u["username"] == body.username for u in _USERS.values()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Username '{body.username}' already exists",
+        )
+    user = {"id": _NEXT_USER_ID, "username": body.username, "email": body.email, "age": body.age}
+    _USERS[_NEXT_USER_ID] = user
+    _NEXT_USER_ID += 1
+    return user
+
+
+# ── POST /orders ─────────────────────────────────────────────────────────────────
+
+@app.post("/orders", status_code=201)
+async def create_order(
+    body: OrderCreate,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    """
+    Cria um pedido.
+    - 401 se header X-Auth-Token ausente
+    - 404 se user_id não existe
+    - 400 se coupon inválido
+    - 422 se body inválido (Pydantic)
+    """
+    global _NEXT_ORDER_ID
+    if not x_auth_token:
+        raise HTTPException(status_code=401, detail="Missing X-Auth-Token header")
+    if body.user_id not in _USERS:
+        raise HTTPException(status_code=404, detail=f"User {body.user_id} not found")
+    if body.coupon and body.coupon not in VALID_COUPONS:
+        raise HTTPException(status_code=400, detail=f"Invalid coupon '{body.coupon}'")
+    discount = 0.10 if body.coupon == "SAVE10" else (0.20 if body.coupon == "FLARE20" else 0.0)
+    order = {
+        "id": _NEXT_ORDER_ID,
+        "user_id": body.user_id,
+        "product": body.product,
+        "quantity": body.quantity,
+        "discount": discount,
+    }
+    _ORDERS[_NEXT_ORDER_ID] = order
+    _NEXT_ORDER_ID += 1
+    return order
+
+
+# ── POST /payments ───────────────────────────────────────────────────────────────
+
+@app.post("/payments", status_code=201)
+async def create_payment(body: PaymentCreate):
+    """
+    Processa pagamento.
+    - 422 se body inválido (Pydantic)
+    - 404 se order_id não existe
+    - 409 se pedido já foi pago
+    - 402 se amount não corresponde ao total do pedido  (simulado: total > amount * 1.5)
+    - 500 se amount == 13.37 (trigger de bug simulado)
+    """
+    if body.order_id not in _ORDERS:
+        raise HTTPException(status_code=404, detail=f"Order {body.order_id} not found")
+    if body.order_id in _PAID_ORDERS:
+        raise HTTPException(status_code=409, detail=f"Order {body.order_id} already paid")
+    if body.amount == 13.37:  # simula bug de produção
+        raise RuntimeError(f"Billing engine fault — amount={body.amount} triggered a known bug")
+    order = _ORDERS[body.order_id]
+    expected = order.get("total", body.amount)  # some orders lack total
+    if isinstance(expected, float) and body.amount < expected * 0.5:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Insufficient amount {body.amount} for order total {expected}",
+        )
+    _PAID_ORDERS.add(body.order_id)
+    return {"paid": True, "order_id": body.order_id, "method": body.method, "charged": body.amount}
 
 
 if __name__ == "__main__":

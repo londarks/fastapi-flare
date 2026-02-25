@@ -85,6 +85,13 @@ def _parse_entry(entry_id: str, fields: dict[str, str]) -> FlareLogEntry:
         except Exception:
             ctx = None
 
+    body = fields.get("request_body")
+    if body and isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            pass
+
     ts_raw = fields.get("timestamp")
     if ts_raw:
         try:
@@ -109,6 +116,7 @@ def _parse_entry(entry_id: str, fields: dict[str, str]) -> FlareLogEntry:
         error=fields.get("error") or None,
         stack_trace=fields.get("stack_trace") or None,
         context=ctx,
+        request_body=body,
     )
 
 
@@ -265,13 +273,38 @@ class RedisStorage:
         """
         XREVRANGE the Stream (newest-first), apply filters in-process,
         and slice to the requested page.
+
+        Fast-path for unfiltered queries: uses XLEN for total count and
+        fetches only the entries needed for the requested page, avoiding
+        a full stream scan.
         """
         client = await _get_client(self._config)
         if client is None:
             return [], 0
 
         try:
-            raw = await client.xrevrange(
+            # — Fast path: no filters — only fetch what we need
+            if not level and not event and not search:
+                pipe = client.pipeline()
+                pipe.xlen(self._config.stream_key)
+                pipe.xrevrange(
+                    self._config.stream_key,
+                    max="+",
+                    min="-",
+                    count=page * limit,  # fetch only up to the requested page
+                )
+                total, raw = await pipe.execute()
+                offset = (page - 1) * limit
+                entries: list[FlareLogEntry] = []
+                for entry_id, fields in raw[offset : offset + limit]:
+                    try:
+                        entries.append(_parse_entry(entry_id, fields))
+                    except Exception:
+                        continue
+                return entries, total
+
+            # — Filtered path: scan up to max_entries
+            raw_all = await client.xrevrange(
                 self._config.stream_key,
                 max="+",
                 min="-",
@@ -281,7 +314,7 @@ class RedisStorage:
             return [], 0
 
         all_entries: list[FlareLogEntry] = []
-        for entry_id, fields in raw:
+        for entry_id, fields in raw_all:
             try:
                 entry = _parse_entry(entry_id, fields)
             except Exception:
@@ -305,59 +338,54 @@ class RedisStorage:
     async def get_stats(self) -> FlareStats:
         """
         Compute dashboard summary statistics from the Redis Stream and queue.
+        All Redis calls are batched into a single pipeline round-trip.
         """
         config = self._config
         client = await _get_client(config)
 
-        queue_length = 0
-        stream_length = 0
-        errors_24h = 0
-        warnings_24h = 0
-        oldest_ts: Optional[datetime] = None
-        newest_ts: Optional[datetime] = None
+        if client is None:
+            return FlareStats(
+                total_entries=0, errors_last_24h=0, warnings_last_24h=0,
+                queue_length=0, stream_length=0,
+            )
+
+        cutoff_ms = int(
+            (datetime.now(tz=timezone.utc) - timedelta(hours=24)).timestamp() * 1000
+        )
 
         try:
-            # Queue depth
-            if client:
-                queue_length = await client.llen(config.queue_key)
-
-            if client is None:
-                return FlareStats(
-                    total_entries=0,
-                    errors_last_24h=0,
-                    warnings_last_24h=0,
-                    queue_length=queue_length,
-                    stream_length=0,
-                )
-
-            stream_length = await client.xlen(config.stream_key)
-
-            cutoff_ms = int(
-                (datetime.now(tz=timezone.utc) - timedelta(hours=24)).timestamp() * 1000
-            )
-            recent = await client.xrange(
-                config.stream_key, min=f"{cutoff_ms}-0", max="+"
-            )
-            for _, fields in recent:
-                lvl = fields.get("level", "")
-                if lvl == "ERROR":
-                    errors_24h += 1
-                elif lvl == "WARNING":
-                    warnings_24h += 1
-
-            newest_raw = await client.xrevrange(config.stream_key, count=1)
-            if newest_raw:
-                newest_ts = datetime.fromtimestamp(
-                    _entry_id_to_ms(newest_raw[0][0]) / 1000, tz=timezone.utc
-                )
-
-            oldest_raw = await client.xrange(config.stream_key, count=1)
-            if oldest_raw:
-                oldest_ts = datetime.fromtimestamp(
-                    _entry_id_to_ms(oldest_raw[0][0]) / 1000, tz=timezone.utc
-                )
+            pipe = client.pipeline()
+            pipe.llen(config.queue_key)                               # 0 queue depth
+            pipe.xlen(config.stream_key)                              # 1 stream length
+            pipe.xrange(config.stream_key, min=f"{cutoff_ms}-0", max="+")  # 2 last 24h
+            pipe.xrevrange(config.stream_key, count=1)               # 3 newest entry
+            pipe.xrange(config.stream_key, count=1)                  # 4 oldest entry
+            queue_length, stream_length, recent, newest_raw, oldest_raw = await pipe.execute()
         except Exception:
-            pass
+            return FlareStats(
+                total_entries=0, errors_last_24h=0, warnings_last_24h=0,
+                queue_length=0, stream_length=0,
+            )
+
+        errors_24h = 0
+        warnings_24h = 0
+        for _, fields in recent:
+            lvl = fields.get("level", "")
+            if lvl == "ERROR":
+                errors_24h += 1
+            elif lvl == "WARNING":
+                warnings_24h += 1
+
+        newest_ts: Optional[datetime] = None
+        oldest_ts: Optional[datetime] = None
+        if newest_raw:
+            newest_ts = datetime.fromtimestamp(
+                _entry_id_to_ms(newest_raw[0][0]) / 1000, tz=timezone.utc
+            )
+        if oldest_raw:
+            oldest_ts = datetime.fromtimestamp(
+                _entry_id_to_ms(oldest_raw[0][0]) / 1000, tz=timezone.utc
+            )
 
         return FlareStats(
             total_entries=stream_length,

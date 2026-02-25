@@ -104,6 +104,7 @@ async def push_log(
     error: Optional[str] = None,
     stack_trace: Optional[str] = None,
     context: Optional[dict] = None,
+    request_body: Optional[Any] = None,
 ) -> None:
     """
     Fire-and-forget: builds a log entry dict and hands it to the active
@@ -120,6 +121,13 @@ async def push_log(
         if context:
             masked_context = _mask_sensitive(context, config.sensitive_fields)
 
+        masked_body = None
+        if request_body is not None:
+            if isinstance(request_body, dict):
+                masked_body = _mask_sensitive(request_body, config.sensitive_fields)
+            else:
+                masked_body = request_body
+
         entry = {
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "level": level,
@@ -134,6 +142,7 @@ async def push_log(
             "error": error,
             "stack_trace": stack_trace,
             "context": masked_context,
+            "request_body": masked_body,
         }
 
         storage = config.storage_instance

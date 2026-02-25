@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ class FlareLogEntry(BaseModel):
     error: Optional[str] = None
     stack_trace: Optional[str] = None
     context: Optional[dict] = None
+    request_body: Optional[Any] = None
 
     model_config = {"from_attributes": True}
 
@@ -40,6 +41,27 @@ class FlareLogPage(BaseModel):
     page: int
     limit: int
     pages: int
+
+
+class FlareEndpointMetric(BaseModel):
+    """Per-endpoint request metrics aggregated in memory by FlareMetrics."""
+
+    endpoint: str
+    count: int
+    errors: int
+    avg_latency_ms: int
+    max_latency_ms: int
+    error_rate: float
+
+
+class FlareMetricsSnapshot(BaseModel):
+    """Snapshot of all endpoint metrics returned by GET /flare/api/metrics."""
+
+    endpoints: list[FlareEndpointMetric]
+    total_requests: int
+    total_errors: int
+    at_capacity: bool = False
+    max_endpoints: int = 500
 
 
 class FlareStats(BaseModel):

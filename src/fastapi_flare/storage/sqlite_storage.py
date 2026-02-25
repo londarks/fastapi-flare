@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS logs (
     ip_address  TEXT,
     error       TEXT,
     stack_trace TEXT,
-    context     TEXT
+    context     TEXT,
+    request_body TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
@@ -97,6 +98,13 @@ class SQLiteStorage:
         await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.commit()
 
+        # Migration: add request_body column to existing databases
+        try:
+            await self._db.execute("ALTER TABLE logs ADD COLUMN request_body TEXT")
+            await self._db.commit()
+        except Exception:
+            pass  # column already exists
+
         return self._db
 
     # ── Write path ────────────────────────────────────────────────────────
@@ -110,13 +118,14 @@ class SQLiteStorage:
             db = await self._ensure_db()
 
             ctx = entry_dict.get("context")
+            body = entry_dict.get("request_body")
             await db.execute(
                 """
                 INSERT INTO logs (
                     timestamp, level, event, message, endpoint,
                     http_method, http_status, duration_ms, request_id,
-                    ip_address, error, stack_trace, context
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ip_address, error, stack_trace, context, request_body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_dict.get("timestamp"),
@@ -132,6 +141,7 @@ class SQLiteStorage:
                     entry_dict.get("error"),
                     entry_dict.get("stack_trace"),
                     json.dumps(ctx, default=str) if isinstance(ctx, (dict, list)) else ctx,
+                    json.dumps(body, default=str) if isinstance(body, (dict, list)) else body,
                 ),
             )
             await db.commit()
@@ -319,6 +329,13 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         except Exception:
             ctx = None
 
+    body = row["request_body"] if "request_body" in row.keys() else None
+    if body and isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            pass
+
     ts = _parse_dt(row["timestamp"]) or datetime.now(tz=timezone.utc)
 
     return FlareLogEntry(
@@ -336,4 +353,5 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         error=row["error"],
         stack_trace=row["stack_trace"],
         context=ctx,
+        request_body=body,
     )
