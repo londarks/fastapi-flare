@@ -259,6 +259,102 @@ setup(app, config=FlareConfig(
 
 ---
 
+## Zitadel Authentication
+
+`fastapi-flare` has built-in support for protecting the `/flare` dashboard with [Zitadel](https://zitadel.com/) OIDC — JWT tokens are validated against Zitadel's JWKS endpoint automatically.
+
+> **Requires the `[auth]` extra:**
+> ```bash
+> pip install 'fastapi-flare[auth]'
+> ```
+
+### Prerequisites
+
+In your Zitadel console:
+1. Create a **Web Application** inside a project (type: PKCE or JWT Profile)
+2. Note your **Domain** — e.g. `auth.mycompany.com`
+3. Note the **Client ID** of the application
+4. Note the **Project ID** (visible in the project's **General** settings)
+
+### Method 1 — Auto-wiring via `FlareConfig` (recommended)
+
+When all three Zitadel fields are provided, `setup()` automatically injects JWT validation into the `/flare` dashboard — no extra code needed:
+
+```python
+from fastapi_flare import setup, FlareConfig
+
+setup(app, config=FlareConfig(
+    redis_url="redis://localhost:6379",
+    zitadel_domain="auth.mycompany.com",
+    zitadel_client_id="000000000000000001",
+    zitadel_project_id="000000000000000002",
+))
+```
+
+### Method 2 — Environment variables
+
+You can configure everything without touching code:
+
+```bash
+FLARE_ZITADEL_DOMAIN=auth.mycompany.com
+FLARE_ZITADEL_CLIENT_ID=000000000000000001
+FLARE_ZITADEL_PROJECT_ID=000000000000000002
+```
+
+`setup()` reads these automatically from the environment — the same auto-wiring applies.
+
+### Method 3 — Manual wiring (advanced)
+
+Use this when you need additional audiences, custom claim validation, or want to reuse the dependency elsewhere:
+
+```python
+from fastapi_flare import setup, FlareConfig
+from fastapi_flare.zitadel import make_zitadel_dependency
+
+dep = make_zitadel_dependency(
+    domain="auth.mycompany.com",
+    client_id="000000000000000001",
+    project_id="000000000000000002",
+)
+
+setup(app, config=FlareConfig(
+    redis_url="redis://localhost:6379",
+    dashboard_auth_dependency=dep,
+))
+```
+
+### Project migration — accepting tokens from an old project
+
+If you migrated your Zitadel project and need to accept tokens issued under both the old and new project IDs during a transition period, set the legacy fields:
+
+```bash
+FLARE_ZITADEL_OLD_CLIENT_ID=old-client-id
+FLARE_ZITADEL_OLD_PROJECT_ID=old-project-id
+```
+
+Or in code:
+
+```python
+FlareConfig(
+    zitadel_domain="auth.mycompany.com",
+    zitadel_client_id="new-client-id",
+    zitadel_project_id="new-project-id",
+    zitadel_old_client_id="old-client-id",
+    zitadel_old_project_id="old-project-id",
+)
+```
+
+Tokens from either project are accepted until you remove the `_old_*` fields.
+
+### How it works
+
+- On the first request, `fastapi-flare` fetches Zitadel's public keys from `https://{zitadel_domain}/oauth/v2/keys` and caches them in memory.
+- Every token is validated for **signature** (RS256), **expiry**, **issuer**, and **audience** (client ID + project ID).
+- On a key-rotation miss the JWKS cache is automatically busted and re-fetched once.
+- Use `clear_jwks_cache()` in tests to reset state between runs.
+
+---
+
 ## Running the Example
 
 **SQLite mode** (no dependencies):
