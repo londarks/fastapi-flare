@@ -62,7 +62,10 @@ from fastapi_flare.config import FlareConfig
 from fastapi_flare.metrics import FlareMetrics
 from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareMetricsSnapshot, FlareStats
 from fastapi_flare.zitadel import (
+    ZitadelBrowserRedirect,
     clear_jwks_cache,
+    exchange_zitadel_code,
+    make_zitadel_browser_dependency,
     make_zitadel_dependency,
     verify_zitadel_token,
 )
@@ -77,8 +80,11 @@ __all__ = [
     "FlareMetricsSnapshot",
     # Zitadel auth helpers
     "make_zitadel_dependency",
+    "make_zitadel_browser_dependency",
+    "exchange_zitadel_code",
     "verify_zitadel_token",
     "clear_jwks_cache",
+    "ZitadelBrowserRedirect",
 ]
 __version__ = "0.1.0"
 
@@ -125,13 +131,16 @@ def setup(
     config.storage_instance = make_storage(config)
     # ── Instantiate in-memory metrics aggregator ──────────────────────────
     config.metrics_instance = FlareMetrics(max_endpoints=config.metrics_max_endpoints)
-    # ── Auto-wire Zitadel auth dependency ────────────────────────────────────
-    # Activated when the three required Zitadel fields are present AND the user
-    # has not already supplied a custom dashboard_auth_dependency.
+    # ── Auto-wire Zitadel auth dependency (modo Bearer) ────────────────────────
+    # Ativado quando os três campos Zitadel estão presentes E o usuário não
+    # forneceu dashboard_auth_dependency customizado.
+    # Modo browser (zitadel_redirect_uri definido) é gerenciado dentro do
+    # router.py diretamente — não usa dashboard_auth_dependency.
     if (
         config.zitadel_domain
         and config.zitadel_client_id
         and config.zitadel_project_id
+        and not config.zitadel_redirect_uri  # browser mode é feito no router.py
         and config.dashboard_auth_dependency is None
     ):
         extra: list[str] = [
@@ -156,7 +165,7 @@ def setup(
     )
     from fastapi.exceptions import RequestValidationError
     from fastapi_flare.middleware import BodyCacheMiddleware, MetricsMiddleware, RequestIdMiddleware
-    from fastapi_flare.router import make_router
+    from fastapi_flare.router import make_router, make_callback_router
     from fastapi_flare.worker import FlareWorker
 
     # Middleware stack — add_middleware() inserts in reverse, so the LAST call
@@ -173,10 +182,31 @@ def setup(
     app.add_middleware(BodyCacheMiddleware)
     app.add_middleware(MetricsMiddleware, config=config)
     app.add_middleware(RequestIdMiddleware)
+
+    # SessionMiddleware — necessário para o fluxo PKCE browser.
+    # Deve ser adicionado por último (torna-se a camada mais externa),
+    # garantindo que request.session esteja disponível para todos os handlers.
+    if config.zitadel_redirect_uri:
+        import secrets as _secrets
+        from starlette.middleware.sessions import SessionMiddleware as _SessionMiddleware
+
+        _session_secret = config.zitadel_session_secret or _secrets.token_hex(32)
+        _secure = config.zitadel_redirect_uri.startswith("https")
+        app.add_middleware(
+            _SessionMiddleware,
+            secret_key=_session_secret,
+            session_cookie="flare_session",
+            max_age=3600 * 24,  # 24 horas
+            same_site="lax",
+            https_only=_secure,
+        )
+
     app.add_exception_handler(HTTPException, make_http_exception_handler(config))
     app.add_exception_handler(RequestValidationError, make_validation_exception_handler(config))
     app.add_exception_handler(Exception, make_generic_exception_handler(config))
     app.include_router(make_router(config))
+    if config.zitadel_redirect_uri:
+        app.include_router(make_callback_router(config))
 
     worker = FlareWorker(config)
     _wrap_lifespan(app, worker)

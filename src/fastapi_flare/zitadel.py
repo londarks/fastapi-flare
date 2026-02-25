@@ -34,10 +34,15 @@ Dependencies required::
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import secrets
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.requests import Request
 
 _security = HTTPBearer(
     scheme_name="Bearer Token",
@@ -305,6 +310,164 @@ def make_zitadel_dependency(
         )
 
     return _zitadel_auth
+
+
+# ============================================================================
+# BROWSER-BASED OAUTH2 PKCE FLOW
+# ============================================================================
+
+class ZitadelBrowserRedirect(Exception):
+    """
+    Raised by :func:`make_zitadel_browser_dependency` when the user has no
+    valid session cookie.  Caught by the exception handler registered in
+    ``setup()`` to issue a 302 redirect to Zitadel's authorization endpoint.
+
+    Attributes:
+        location: Full Zitadel authorization URL (with PKCE challenge).
+        verifier: PKCE ``code_verifier`` — stored in a short-lived cookie.
+        state:    CSRF state token — stored in a short-lived cookie.
+    """
+
+    def __init__(self, location: str, verifier: str, state: str) -> None:
+        self.location = location
+        self.verifier = verifier
+        self.state = state
+
+
+def make_zitadel_browser_dependency(
+    domain: str,
+    client_id: str,
+    project_id: str,
+    redirect_uri: str,
+    extra_audiences: Optional[List[str]] = None,
+):
+    """
+    Returns a FastAPI dependency for **browser-based** OAuth2 PKCE via Zitadel.
+
+    When a user opens the /flare dashboard without a valid ``flare_token``
+    cookie they are transparently redirected to Zitadel's login page.  After
+    a successful login Zitadel calls ``redirect_uri`` (``/flare/callback``),
+    which exchanges the code for a token, sets the cookie, and redirects back
+    to the dashboard.
+
+    Usage (automatic — configure ``zitadel_redirect_uri`` in FlareConfig)::
+
+        setup(app, config=FlareConfig(
+            zitadel_domain="auth.mycompany.com",
+            zitadel_client_id="000000000000000001",
+            zitadel_project_id="000000000000000002",
+            zitadel_redirect_uri="https://myapp.com/flare/callback",
+        ))
+
+    Args:
+        domain:           Zitadel domain (e.g. ``auth.example.com``).
+        client_id:        OAuth2 Client ID.
+        project_id:       Zitadel Project ID.
+        redirect_uri:     Callback URL registered in Zitadel
+                          (must match exactly, e.g. ``https://myapp.com/flare/callback``).
+        extra_audiences:  Additional accepted ``aud`` values (legacy migration).
+
+    Returns:
+        Async FastAPI dependency that either returns the decoded JWT payload
+        or raises :class:`ZitadelBrowserRedirect`.
+    """
+    valid_audiences: List[str] = list({client_id, project_id, *(extra_audiences or [])})
+
+    async def _browser_auth(request: Request) -> Dict[str, Any]:
+        """Validates the session cookie; redirects to Zitadel if absent/expired."""
+        token = request.cookies.get("flare_token")
+
+        if token:
+            try:
+                return await verify_zitadel_token(token, domain, valid_audiences)
+            except HTTPException:
+                pass  # Token expirado ou inválido — cai no redirect abaixo
+
+        # Gera PKCE challenge
+        state = secrets.token_urlsafe(16)
+        verifier = secrets.token_urlsafe(43)
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode()
+        )
+
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid profile email",
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        auth_url = f"https://{domain}/oauth/v2/authorize?{urlencode(params)}"
+        raise ZitadelBrowserRedirect(auth_url, verifier, state)
+
+    return _browser_auth
+
+
+async def exchange_zitadel_code(
+    domain: str,
+    client_id: str,
+    redirect_uri: str,
+    code: str,
+    code_verifier: str,
+) -> str:
+    """
+    Exchanges an OAuth2 authorization code for a Zitadel access token.
+
+    Called by the ``/flare/callback`` route after Zitadel redirects back
+    with ``?code=...&state=...``.
+
+    Args:
+        domain:        Zitadel domain.
+        client_id:     OAuth2 Client ID (used in ``client_id`` form field).
+        redirect_uri:  Must exactly match the URI used in the authorization request.
+        code:          Authorization code received from Zitadel.
+        code_verifier: PKCE verifier stored in the short-lived cookie.
+
+    Returns:
+        Raw JWT access_token string.
+
+    Raises:
+        HTTPException 502: If the token exchange request fails.
+    """
+    try:
+        import httpx
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "httpx is required for Zitadel authentication. "
+            "Install it with: pip install 'fastapi-flare[auth]'"
+        ) from exc
+
+    token_url = f"https://{domain}/oauth/v2/token"
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
+        "code_verifier": code_verifier,
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.post(token_url, data=data)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Falha ao trocar código por token no Zitadel: {exc}",
+            ) from exc
+
+    payload = response.json()
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Zitadel não retornou access_token na resposta do token endpoint",
+        )
+    return access_token
 
 
 # ============================================================================

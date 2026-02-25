@@ -93,6 +93,22 @@ class FlareConfig(BaseSettings):
     # Legacy / migration: tokens issued to old project IDs remain valid
     zitadel_old_client_id: Optional[str] = None
     zitadel_old_project_id: Optional[str] = None
+    # When set, enables browser-based OAuth2 PKCE flow.
+    # Users who open /flare in a browser are redirected to Zitadel's login page.
+    # After authentication, Zitadel redirects to this URL (must point to /flare/callback).
+    #
+    # Example:
+    #   FLARE_ZITADEL_REDIRECT_URI=https://myapp.com/flare/callback
+    #
+    # Without this field, the bearer-token mode is used instead (API clients only).
+    zitadel_redirect_uri: Optional[str] = None
+    # Secret key used to sign the session cookie in browser-based PKCE flow.
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    # If not set, a random key is generated at startup (sessions lost on restart).
+    #
+    # Environment variable:
+    #   FLARE_ZITADEL_SESSION_SECRET=<hex-string>
+    zitadel_session_secret: Optional[str] = None
 
     # ── Worker ───────────────────────────────────────────────────────────────
     worker_interval_seconds: int = 5

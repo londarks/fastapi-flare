@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI router for fastapi-flare.
 
 Registers routes under config.dashboard_path:
@@ -13,11 +13,16 @@ It has no knowledge of whether Redis, SQLite, or any other backend is in use.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import pathlib
+import secrets
 from typing import Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from fastapi_flare.schema import (
@@ -35,51 +40,176 @@ def make_router(config) -> APIRouter:
     """Returns a configured APIRouter. Called once during setup()."""
     router = APIRouter(prefix=config.dashboard_path, include_in_schema=False)
 
-    deps = []
-    if config.dashboard_auth_dependency is not None:
-        deps.append(Depends(config.dashboard_auth_dependency))
-
     _errors_path  = config.dashboard_path
     _metrics_path = config.dashboard_path + "/metrics"
     _api_base     = config.dashboard_path + "/api"
 
-    # -- Dashboard: Errors ----------------------------------------------------
+    # =========================================================================
+    # MODO BROWSER (PKCE) — zitadel_redirect_uri definido
+    # =========================================================================
+    # Sessão gerenciada pelo SessionMiddleware (cookie assinado "flare_session").
+    # PKCE verifier/state ficam em request.session — não em cookies separados.
+    # =========================================================================
+    if config.zitadel_redirect_uri:
+        from datetime import datetime, timedelta
+        from fastapi_flare.zitadel import exchange_zitadel_code
 
-    @router.get("", dependencies=deps)
-    async def dashboard(request: Request):
-        """Serves the errors dashboard."""
-        return _templates.TemplateResponse(
-            request=request,
-            name="errors.html",
-            context={
-                "title":        config.dashboard_title,
-                "api_base":     _api_base,
-                "errors_path":  _errors_path,
-                "metrics_path": _metrics_path,
-                "active_tab":   "errors",
-            },
-        )
+        _domain       = config.zitadel_domain
+        _client_id    = config.zitadel_client_id
+        _project_id   = config.zitadel_project_id
+        _redirect_uri = config.zitadel_redirect_uri
+        _secure       = _redirect_uri.startswith("https")
+        _login_path   = config.dashboard_path + "/auth/login"
 
-    # -- Dashboard: Metrics ---------------------------------------------------
+        def _session_valid(request: Request) -> bool:
+            """True se a sessão contém um usuário autenticado e não expirado."""
+            if not request.session.get("authenticated"):
+                return False
+            expires_str = request.session.get("expires_at")
+            if expires_str:
+                if datetime.utcnow() > datetime.fromisoformat(expires_str):
+                    request.session.clear()
+                    return False
+            return True
 
-    @router.get("/metrics", dependencies=deps)
-    async def metrics_dashboard(request: Request):
-        """Serves the metrics dashboard (server-side skeleton + JS polling)."""
-        return _templates.TemplateResponse(
-            request=request,
-            name="metrics.html",
-            context={
-                "title":        config.dashboard_title,
-                "api_base":     _api_base,
-                "errors_path":  _errors_path,
-                "metrics_path": _metrics_path,
-                "active_tab":   "metrics",
-            },
-        )
+        async def _require_session_api(request: Request) -> None:
+            """Dependência para rotas /api — retorna 401 se sem sessão válida."""
+            if not _session_valid(request):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Sessão expirada ou ausente. Recarregue o dashboard.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
-    # -- REST: logs -----------------------------------------------------------
+        api_deps = [Depends(_require_session_api)]
 
-    @router.get("/api/logs", dependencies=deps)
+        # -- Dashboard: Errors ------------------------------------------------
+
+        @router.get("")
+        async def dashboard(request: Request):
+            if not _session_valid(request):
+                return RedirectResponse(
+                    url=f"{_login_path}?return_to={_errors_path}", status_code=302
+                )
+            return _templates.TemplateResponse(
+                request=request,
+                name="errors.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "active_tab":   "errors",
+                },
+            )
+
+        # -- Dashboard: Metrics -----------------------------------------------
+
+        @router.get("/metrics")
+        async def metrics_dashboard(request: Request):
+            if not _session_valid(request):
+                return RedirectResponse(
+                    url=f"{_login_path}?return_to={_metrics_path}", status_code=302
+                )
+            return _templates.TemplateResponse(
+                request=request,
+                name="metrics.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "active_tab":   "metrics",
+                },
+            )
+
+        # -- Auth: Login — inicia fluxo PKCE ----------------------------------
+
+        @router.get("/auth/login")
+        async def auth_login(request: Request, return_to: str = _errors_path):
+            """Gera PKCE challenge, salva na sessão e redireciona para o Zitadel."""
+            # Já autenticado? vai direto pro destino
+            if _session_valid(request):
+                return RedirectResponse(url=return_to, status_code=302)
+
+            verifier  = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+            challenge = (
+                base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+                .rstrip(b"=").decode()
+            )
+            state = secrets.token_urlsafe(32)
+
+            request.session["code_verifier"] = verifier
+            request.session["state"]         = state
+            request.session["return_to"]     = return_to
+
+            params = {
+                "client_id":             _client_id,
+                "redirect_uri":          _redirect_uri,
+                "response_type":         "code",
+                "scope":                 "openid profile email",
+                "state":                 state,
+                "code_challenge":        challenge,
+                "code_challenge_method": "S256",
+            }
+            auth_url = f"https://{_domain}/oauth/v2/authorize?{urlencode(params)}"
+            return RedirectResponse(url=auth_url, status_code=302)
+
+        # -- Auth: Logout -----------------------------------------------------
+
+        @router.get("/auth/logout")
+        async def auth_logout(request: Request):
+            """Limpa a sessão e redireciona para a tela de login do Zitadel."""
+            request.session.clear()
+            return RedirectResponse(url=_login_path, status_code=302)
+
+    # =========================================================================
+    # MODO BEARER / SEM AUTH
+    # =========================================================================
+    else:
+        deps = []
+        if config.dashboard_auth_dependency is not None:
+            deps.append(Depends(config.dashboard_auth_dependency))
+
+        api_deps = deps
+
+        # -- Dashboard: Errors ------------------------------------------------
+
+        @router.get("", dependencies=deps)
+        async def dashboard(request: Request):
+            return _templates.TemplateResponse(
+                request=request,
+                name="errors.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "active_tab":   "errors",
+                },
+            )
+
+        # -- Dashboard: Metrics -----------------------------------------------
+
+        @router.get("/metrics", dependencies=deps)
+        async def metrics_dashboard(request: Request):
+            return _templates.TemplateResponse(
+                request=request,
+                name="metrics.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "active_tab":   "metrics",
+                },
+            )
+
+    # =========================================================================
+    # ROTAS /api — compartilhadas por ambos os modos
+    # =========================================================================
+
+    @router.get("/api/logs", dependencies=api_deps)
     async def get_logs(
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=500),
@@ -96,9 +226,7 @@ def make_router(config) -> APIRouter:
         pages = max(1, (total + limit - 1) // limit)
         return FlareLogPage(logs=entries, total=total, page=page, limit=limit, pages=pages)
 
-    # -- REST: stats ----------------------------------------------------------
-
-    @router.get("/api/stats", dependencies=deps)
+    @router.get("/api/stats", dependencies=api_deps)
     async def get_stats() -> FlareStats:
         storage = config.storage_instance
         if storage is None:
@@ -108,11 +236,8 @@ def make_router(config) -> APIRouter:
             )
         return await storage.get_stats()
 
-    # -- REST: metrics --------------------------------------------------------
-
-    @router.get("/api/metrics", dependencies=deps)
+    @router.get("/api/metrics", dependencies=api_deps)
     async def get_metrics() -> FlareMetricsSnapshot:
-        """Returns the current in-memory metrics snapshot."""
         m = config.metrics_instance
         if m is None:
             return FlareMetricsSnapshot(endpoints=[], total_requests=0, total_errors=0)
@@ -126,3 +251,86 @@ def make_router(config) -> APIRouter:
         )
 
     return router
+
+
+def make_callback_router(config) -> APIRouter:
+    """Router sem prefix para o callback OAuth2 — path extraído de zitadel_redirect_uri."""
+    from datetime import datetime, timedelta
+    from urllib.parse import urlparse
+    from fastapi_flare.zitadel import exchange_zitadel_code
+
+    _domain       = config.zitadel_domain
+    _client_id    = config.zitadel_client_id
+    _redirect_uri = config.zitadel_redirect_uri
+    _errors_path  = config.dashboard_path
+
+    # Extrai só o path da URI (ex: "http://localhost:8002/auth/callback" → "/auth/callback")
+    _callback_path = urlparse(_redirect_uri).path
+
+    callback_router = APIRouter(include_in_schema=False)
+
+    @callback_router.get(_callback_path)
+    async def zitadel_callback(
+        request: Request,
+        code: Optional[str] = Query(None),
+        state: Optional[str] = Query(None),
+        error: Optional[str] = Query(None),
+    ):
+        """Recebe o code do Zitadel, troca por token, busca userinfo e cria sessão."""
+        if error:
+            raise HTTPException(status_code=400, detail=f"Erro na autenticação: {error}")
+        if not code:
+            raise HTTPException(status_code=400, detail="Authorization code não fornecido")
+
+        saved_state = request.session.get("state")
+        if not saved_state or saved_state != state:
+            raise HTTPException(status_code=400, detail="State inválido — possível ataque CSRF")
+
+        verifier = request.session.get("code_verifier")
+        if not verifier:
+            raise HTTPException(
+                status_code=400,
+                detail="Code verifier não encontrado na sessão. Tente fazer login novamente.",
+            )
+
+        access_token = await exchange_zitadel_code(
+            domain=_domain,
+            client_id=_client_id,
+            redirect_uri=_redirect_uri,
+            code=code,
+            code_verifier=verifier,
+        )
+
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=15.0) as _client:
+                ui_resp = await _client.get(
+                    f"https://{_domain}/oidc/v1/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                ui_resp.raise_for_status()
+                userinfo = ui_resp.json()
+        except Exception:
+            userinfo = {}
+
+        request.session["authenticated"] = True
+        request.session["access_token"]  = access_token
+        request.session["user"] = {
+            "sub":            userinfo.get("sub", ""),
+            "email":          userinfo.get("email", ""),
+            "name":           userinfo.get("name", userinfo.get("preferred_username", "User")),
+            "given_name":     userinfo.get("given_name", ""),
+            "family_name":    userinfo.get("family_name", ""),
+            "picture":        userinfo.get("picture", ""),
+            "email_verified": userinfo.get("email_verified", False),
+        }
+        expires_at = datetime.utcnow() + timedelta(hours=1)
+        request.session["expires_at"] = expires_at.isoformat()
+        request.session.pop("code_verifier", None)
+        request.session.pop("state", None)
+
+        return_to = request.session.pop("return_to", _errors_path)
+        return RedirectResponse(url=return_to, status_code=302)
+
+    return callback_router
+

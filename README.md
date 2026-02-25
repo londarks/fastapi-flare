@@ -261,51 +261,93 @@ setup(app, config=FlareConfig(
 
 ## Zitadel Authentication
 
-`fastapi-flare` has built-in support for protecting the `/flare` dashboard with [Zitadel](https://zitadel.com/) OIDC — JWT tokens are validated against Zitadel's JWKS endpoint automatically.
+`fastapi-flare` tem suporte nativo para proteger o dashboard `/flare` via [Zitadel](https://zitadel.com/) OIDC.  
+Existem dois modos de integração:
 
-> **Requires the `[auth]` extra:**
+| Modo | Quando usar |
+|---|---|
+| **Browser (PKCE)** | Usuários acessam `/flare` pelo navegador — redirecionados para o login do Zitadel automaticamente |
+| **Bearer Token** | Clientes de API enviam `Authorization: Bearer <token>` — sem redirecionamento |
+
+> **Requer o extra `[auth]`:**
 > ```bash
 > pip install 'fastapi-flare[auth]'
 > ```
 
-### Prerequisites
+### Pré-requisitos
 
-In your Zitadel console:
-1. Create a **Web Application** inside a project (type: PKCE or JWT Profile)
-2. Note your **Domain** — e.g. `auth.mycompany.com`
-3. Note the **Client ID** of the application
-4. Note the **Project ID** (visible in the project's **General** settings)
+No console do Zitadel:
+1. Crie uma **Web Application** dentro de um projeto (tipo: PKCE)
+2. Anote o **Domain** — ex: `auth.mycompany.com`
+3. Anote o **Client ID** da aplicação
+4. Anote o **Project ID** (visível nas configurações gerais do projeto)
+5. **Para modo browser:** registre a URL de callback — ex: `https://myapp.com/flare/callback`
 
-### Method 1 — Auto-wiring via `FlareConfig` (recommended)
+---
 
-When all three Zitadel fields are provided, `setup()` automatically injects JWT validation into the `/flare` dashboard — no extra code needed:
+### Modo Browser (PKCE) — acesso pelo navegador
+
+Quando `zitadel_redirect_uri` está configurado, abrir `/flare` no browser redireciona automaticamente para o Zitadel. Após o login, o Zitadel chama o callback, o token é salvo em cookie e o usuário é redirecionado de volta ao dashboard.
 
 ```python
-from fastapi_flare import setup, FlareConfig
-
 setup(app, config=FlareConfig(
     redis_url="redis://localhost:6379",
     zitadel_domain="auth.mycompany.com",
     zitadel_client_id="000000000000000001",
     zitadel_project_id="000000000000000002",
+    zitadel_redirect_uri="https://myapp.com/flare/callback",
 ))
 ```
 
-### Method 2 — Environment variables
-
-You can configure everything without touching code:
+Via variáveis de ambiente:
 
 ```bash
 FLARE_ZITADEL_DOMAIN=auth.mycompany.com
 FLARE_ZITADEL_CLIENT_ID=000000000000000001
 FLARE_ZITADEL_PROJECT_ID=000000000000000002
+FLARE_ZITADEL_REDIRECT_URI=https://myapp.com/flare/callback
+FLARE_ZITADEL_SESSION_SECRET=<hex-de-32-bytes>  # python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-`setup()` reads these automatically from the environment — the same auto-wiring applies.
+**O que acontece:**
+1. Usuário abre `https://myapp.com/flare` no browser
+2. `fastapi-flare` detecta ausência de sessão → redireciona para `/flare/auth/login`
+3. `/flare/auth/login` gera PKCE challenge, salva `code_verifier` + `state` na sessão, redireciona para o Zitadel
+4. Usuário faz login na tela do Zitadel
+5. Zitadel redireciona para `/flare/callback?code=...&state=...`
+6. `fastapi-flare` valida o state, troca o code pelo `access_token`, chama `/oidc/v1/userinfo`
+7. Dados do usuário e timestamp de expiração salvos na sessão (cookie assinado `flare_session`)
+8. Usuário redirecionado para `/flare` — acesso liberado ✅
 
-### Method 3 — Manual wiring (advanced)
+> **Importante:** registre exatamente `https://yourapp.com/flare/callback` como Redirect URI no app do Zitadel.
 
-Use this when you need additional audiences, custom claim validation, or want to reuse the dependency elsewhere:
+**Rotas criadas automaticamente:**
+
+| Rota | O que faz |
+|---|---|
+| `GET /flare/auth/login` | Inicia o fluxo PKCE → redireciona ao Zitadel |
+| `GET /flare/callback` | Recebe o code, troca por token, cria sessão |
+| `GET /flare/auth/logout` | Limpa a sessão → redireciona ao login |
+
+---
+
+### Modo API (Bearer Token) — sem zitadel_redirect_uri
+
+Quando `zitadel_redirect_uri` **não** está definido, a proteção valida o header `Authorization: Bearer <token>`. Ideal para quando o frontend já gerencia o fluxo PKCE e injeta o token nas requisições.
+
+```python
+setup(app, config=FlareConfig(
+    redis_url="redis://localhost:6379",
+    zitadel_domain="auth.mycompany.com",
+    zitadel_client_id="000000000000000001",
+    zitadel_project_id="000000000000000002",
+    # sem zitadel_redirect_uri → modo Bearer
+))
+```
+
+---
+
+### Modo Manual — dependency customizada (avançado)
 
 ```python
 from fastapi_flare import setup, FlareConfig
@@ -323,35 +365,26 @@ setup(app, config=FlareConfig(
 ))
 ```
 
-### Project migration — accepting tokens from an old project
+---
 
-If you migrated your Zitadel project and need to accept tokens issued under both the old and new project IDs during a transition period, set the legacy fields:
+### Migração de projeto — aceitar tokens do projeto antigo
 
 ```bash
 FLARE_ZITADEL_OLD_CLIENT_ID=old-client-id
 FLARE_ZITADEL_OLD_PROJECT_ID=old-project-id
 ```
 
-Or in code:
+Tokens dos dois projetos são aceitos até você remover os campos `_old_*`.
 
-```python
-FlareConfig(
-    zitadel_domain="auth.mycompany.com",
-    zitadel_client_id="new-client-id",
-    zitadel_project_id="new-project-id",
-    zitadel_old_client_id="old-client-id",
-    zitadel_old_project_id="old-project-id",
-)
-```
+---
 
-Tokens from either project are accepted until you remove the `_old_*` fields.
+### Como funciona internamente
 
-### How it works
-
-- On the first request, `fastapi-flare` fetches Zitadel's public keys from `https://{zitadel_domain}/oauth/v2/keys` and caches them in memory.
-- Every token is validated for **signature** (RS256), **expiry**, **issuer**, and **audience** (client ID + project ID).
-- On a key-rotation miss the JWKS cache is automatically busted and re-fetched once.
-- Use `clear_jwks_cache()` in tests to reset state between runs.
+- A sessão é gerenciada pelo `SessionMiddleware` do Starlette — cookie `flare_session` assinado com HMAC usando `zitadel_session_secret`. Todo o conteúdo (user, tokens, expiração) fica dentro do cookie — sem banco, sem Redis para gerenciar sessões.
+- O `code_verifier` e `state` PKCE são armazenados na sessão (não em cookies separados), exatamente como recomendam as specs do PKCE.
+- Após o callback, `fastapi-flare` chama `/oidc/v1/userinfo` para buscar os dados reais do usuário (email, nome, etc.) e os salva na sessão.
+- Sessões expiram automaticamente após 1 hora — o usuário é redirecionado para login sem interrupção.
+- Use `clear_jwks_cache()` para resetar o cache de JWKS em testes (modo Bearer).
 
 ---
 

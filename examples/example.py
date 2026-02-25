@@ -1,5 +1,5 @@
 """
-fastapi-flare — example app (backend: Redis or SQLite).
+fastapi-flare — example app (backend: Redis ou SQLite).
 
 Para rodar::
 
@@ -17,8 +17,14 @@ Rotas disponíveis::
     DELETE /items/{item_id}        → 404 se não existe (WARNING)
     GET    /flare                  → dashboard de erros
     GET    /flare/metrics          → dashboard de métricas
+    GET    /flare/callback         → callback OAuth2 Zitadel (criado automaticamente)
     GET    /docs                   → Scalar API reference
 """
+import os
+
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
@@ -32,35 +38,43 @@ app = FastAPI(title="fastapi-flare example", docs_url=None, redoc_url=None)
 
 # ── FlareConfig ───────────────────────────────────────────────────────────────────
 #
-# Escolha o backend de armazenamento:
+# Fluxo ao abrir http://localhost:8001/flare no browser:
+#   1. Sem sessão → redireciona para /flare/auth/login
+#   2. /flare/auth/login → PKCE challenge → Zitadel
+#   3. Login → /flare/callback → sessão criada → /flare liberado ✅
 #
-#   SQLite (padrão aqui) — não requer Redis:
-#
-#       config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
-#
-#   Redis — recomendado para produção:
-#       Instale: pip install "fastapi-flare"  (Redis já é dependência padrão)
-#       Configure .env com FLARE_REDIS_URL ou passe redis_url diretamente:
-#
-#       config = FlareConfig(storage_backend="redis", redis_url="redis://localhost:6379")
-#
-# Modo Zitadel (dashboard protegido): adicione ao .env:
-#   FLARE_ZITADEL_DOMAIN=auth.mycompany.com
-#   FLARE_ZITADEL_CLIENT_ID=<your-client-id>
-#   FLARE_ZITADEL_PROJECT_ID=<your-project-id>
-#
-# Quando os três campos Zitadel estiverem presentes, setup() injeta
-# automaticamente o Depends de validação JWT no dashboard /flare.
-# Não é necessário nenhum código adicional.
+# ⚠️  Registre no Zitadel como Redirect URI:
+#       http://localhost:8001/flare/callback
 #
 
-# --- SQLite (sem Redis) ---
-# config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
+setup(app, config=FlareConfig(
+    # ── Redis ────────────────────────────────────────────────────────────────
+    storage_backend="redis",
+    redis_host=os.getenv("FLARE_REDIS_HOST", "localhost"),
+    redis_port=int(os.getenv("FLARE_REDIS_PORT", "6379")),
+    redis_password=os.getenv("FLARE_REDIS_PASSWORD"),
+    redis_db=int(os.getenv("FLARE_REDIS_DB", "0")),
+    stream_key="flare:logs",
+    queue_key="flare:queue",
+    max_entries=10_000,
+    retention_hours=168,
 
-# --- Redis (produção) ---
-config = FlareConfig(storage_backend="redis")  # lê FLARE_REDIS_URL do .env
+    # ── Dashboard ────────────────────────────────────────────────────────────
+    dashboard_path="/flare",
+    dashboard_title="Flare Dashboard",
+    dashboard_auth_dependency=None,
 
-setup(app, config=config)
+    # ── Zitadel — browser PKCE ───────────────────────────────────────────────
+    zitadel_domain=os.getenv("FLARE_ZITADEL_DOMAIN"),
+    zitadel_client_id=os.getenv("FLARE_ZITADEL_CLIENT_ID"),
+    zitadel_project_id=os.getenv("FLARE_ZITADEL_PROJECT_ID"),
+    zitadel_redirect_uri=os.getenv("FLARE_ZITADEL_REDIRECT_URI", "http://localhost:8001/flare/callback"),
+    zitadel_session_secret=os.getenv("FLARE_ZITADEL_SESSION_SECRET"),
+
+    # ── Worker ───────────────────────────────────────────────────────────────
+    worker_interval_seconds=5,
+    worker_batch_size=100,
+))
 
 
 # ── Docs ────────────────────────────────────────────────────────────────────────
@@ -116,16 +130,22 @@ class PaymentCreate(BaseModel):
 
 @app.get("/")
 async def root():
-    secured = bool(
-        config.zitadel_domain
-        and config.zitadel_client_id
-        and config.zitadel_project_id
+    zitadel_domain = os.getenv("FLARE_ZITADEL_DOMAIN")
+    zitadel_client_id = os.getenv("FLARE_ZITADEL_CLIENT_ID")
+    zitadel_project_id = os.getenv("FLARE_ZITADEL_PROJECT_ID")
+    zitadel_redirect_uri = os.getenv("FLARE_ZITADEL_REDIRECT_URI")
+    zitadel_on = bool(zitadel_domain and zitadel_client_id and zitadel_project_id)
+    auth_mode = (
+        "zitadel-browser-pkce" if (zitadel_on and zitadel_redirect_uri)
+        else "zitadel-bearer" if zitadel_on
+        else "none"
     )
     return {
         "message": "OK",
         "dashboard": "/flare",
-        "dashboard_secured": secured,
-        "auth": "zitadel" if secured else "none",
+        "dashboard_secured": zitadel_on,
+        "auth_mode": auth_mode,
+        **({"callback": "/flare/callback"} if zitadel_redirect_uri else {}),
     }
 
 
