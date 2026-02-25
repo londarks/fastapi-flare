@@ -47,20 +47,12 @@ No external services. No configuration files. No noise.
 ## Installation
 
 ```bash
-# Redis backend (default)
 pip install fastapi-flare
-
-# SQLite backend (no Redis needed)
-pip install "fastapi-flare[sqlite]"
-
-# Zitadel JWT auth for the dashboard
-pip install "fastapi-flare[auth]"
-
-# Everything
-pip install "fastapi-flare[sqlite,auth]"
 ```
 
-> **Requirements:** Python 3.11+, FastAPI. Redis is only required when using the default `redis` backend.
+All features (SQLite backend, Zitadel JWT auth) are included in the base install.
+
+> **Requirements:** Python 3.11+, FastAPI. Redis is only required when using the default `redis` storage backend.
 
 ---
 
@@ -114,10 +106,6 @@ docker run -d -p 6379:6379 redis:7
 ### SQLite
 
 Stores everything in a local `.db` file. No external services, no Docker, no configuration — ideal for local development, small deployments, or air-gapped environments.
-
-```bash
-pip install "fastapi-flare[sqlite]"
-```
 
 ```python
 setup(app, config=FlareConfig(

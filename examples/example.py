@@ -10,15 +10,12 @@ Para rodar::
 
 Para rodar com Zitadel (dashboard protegido)::
 
-    # 1. Instale os extras de auth:
-    #    pip install "fastapi-flare[auth]"
-    #
-    # 2. Crie um .env com as variáveis Zitadel:
+    # 1. Crie um .env com as variáveis Zitadel:
     #    FLARE_ZITADEL_DOMAIN=auth.mycompany.com
     #    FLARE_ZITADEL_CLIENT_ID=<your-client-id>
     #    FLARE_ZITADEL_PROJECT_ID=<your-project-id>
     #
-    # 3. Rode normalmente:
+    # 2. Rode normalmente:
     #    poetry run uvicorn examples.example:app --reload --port 8000
 
 Rotas de teste::
