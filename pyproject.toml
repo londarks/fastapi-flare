@@ -17,6 +17,14 @@ dependencies = [
     "uvicorn[standard] (>=0.41.0,<0.42.0)"
 ]
 
+[project.optional-dependencies]
+# Zitadel OAuth2 JWT authentication for the /flare dashboard
+# Install with: pip install "fastapi-flare[auth]"
+auth = [
+    "httpx (>=0.27.0)",
+    "python-jose[cryptography] (>=3.3.0)",
+]
+
 
 [tool.poetry]
 packages = [{include = "fastapi_flare", from = "src"}]

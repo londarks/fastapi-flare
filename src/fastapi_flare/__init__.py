@@ -26,6 +26,29 @@ Full usage::
         retention_hours=72,
         max_entries=5_000,
     ))
+
+Zitadel authentication (optional)::
+
+    from fastapi_flare import setup, FlareConfig
+
+    setup(app, config=FlareConfig(
+        redis_url="redis://localhost:6379",
+        zitadel_domain="auth.mycompany.com",
+        zitadel_client_id="000000000000000001",
+        zitadel_project_id="000000000000000002",
+        # /flare dashboard now requires a valid Zitadel Bearer token
+    ))
+
+Or bring your own dependency::
+
+    from fastapi_flare.zitadel import make_zitadel_dependency
+
+    dep = make_zitadel_dependency(
+        domain="auth.mycompany.com",
+        client_id="000000000000000001",
+        project_id="000000000000000002",
+    )
+    setup(app, config=FlareConfig(dashboard_auth_dependency=dep))
 """
 from __future__ import annotations
 
@@ -37,8 +60,23 @@ from fastapi.exceptions import HTTPException
 
 from fastapi_flare.config import FlareConfig
 from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareStats
+from fastapi_flare.zitadel import (
+    clear_jwks_cache,
+    make_zitadel_dependency,
+    verify_zitadel_token,
+)
 
-__all__ = ["setup", "FlareConfig", "FlareLogEntry", "FlareLogPage", "FlareStats"]
+__all__ = [
+    "setup",
+    "FlareConfig",
+    "FlareLogEntry",
+    "FlareLogPage",
+    "FlareStats",
+    # Zitadel auth helpers
+    "make_zitadel_dependency",
+    "verify_zitadel_token",
+    "clear_jwks_cache",
+]
 __version__ = "0.1.0"
 
 
@@ -56,20 +94,52 @@ def setup(
 
     Steps performed:
       1. Build / validate the FlareConfig
-      2. Add RequestIdMiddleware (assigns UUID + start_time per request)
-      3. Register HTTP exception handler (4xx → WARNING, 5xx → ERROR)
-      4. Register generic exception handler (unhandled → ERROR + traceback)
-      5. Include the dashboard + API router
-      6. Wrap the app lifespan to start/stop the background worker
+      2. Auto-wire Zitadel auth dependency (when ``zitadel_domain`` is set)
+      3. Add RequestIdMiddleware (assigns UUID + start_time per request)
+      4. Register HTTP exception handler (4xx → WARNING, 5xx → ERROR)
+      5. Register generic exception handler (unhandled → ERROR + traceback)
+      6. Include the dashboard + API router
+      7. Wrap the app lifespan to start/stop the background worker
 
     :param app:       The FastAPI application instance.
     :param redis_url: Shorthand for ``FlareConfig(redis_url=...)``.
                       Ignored if ``config`` is provided.
     :param config:    Full ``FlareConfig`` instance for advanced configuration.
     :returns:         The resolved ``FlareConfig`` (useful for introspection).
+
+    .. note::
+        Zitadel auth is activated automatically when **all three** of
+        ``zitadel_domain``, ``zitadel_client_id``, and ``zitadel_project_id``
+        are configured — either via ``FlareConfig(...)`` or the corresponding
+        ``FLARE_ZITADEL_*`` environment variables.  Requires
+        ``pip install 'fastapi-flare[auth]'``.
     """
     if config is None:
         config = FlareConfig(redis_url=redis_url) if redis_url else FlareConfig()
+
+    # ── Auto-wire Zitadel auth dependency ────────────────────────────────────
+    # Activated when the three required Zitadel fields are present AND the user
+    # has not already supplied a custom dashboard_auth_dependency.
+    if (
+        config.zitadel_domain
+        and config.zitadel_client_id
+        and config.zitadel_project_id
+        and config.dashboard_auth_dependency is None
+    ):
+        extra: list[str] = [
+            v
+            for v in (
+                config.zitadel_old_client_id,
+                config.zitadel_old_project_id,
+            )
+            if v is not None
+        ]
+        config.dashboard_auth_dependency = make_zitadel_dependency(
+            domain=config.zitadel_domain,
+            client_id=config.zitadel_client_id,
+            project_id=config.zitadel_project_id,
+            extra_audiences=extra or None,
+        )
 
     from fastapi_flare.handlers import make_generic_exception_handler, make_http_exception_handler
     from fastapi_flare.middleware import RequestIdMiddleware
