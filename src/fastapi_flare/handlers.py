@@ -27,10 +27,26 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
+# Key used by BodyCacheMiddleware to store raw bytes in the request scope.
+# All Request objects for the same HTTP transaction share the same scope dict,
+# so any handler can read this key even after the receive() stream is exhausted.
+_SCOPE_BODY_KEY = "_flare_body"
+
+
 async def _request_body(request: Request, config: "FlareConfig") -> Optional[Any]:
     """Read and return the decoded request body for non-GET methods.
 
-    - Skipped for GET / HEAD (no body).
+    Resolution order:
+    1. ``scope["_flare_body"]`` — set by ``BodyCacheMiddleware`` before the
+       inner app (FastAPI / Pydantic) consumes the ASGI receive() stream.
+       Exception handlers receive a *fresh* ``Request`` object whose ``_body``
+       attribute is not yet populated, but they share the same ``scope`` dict,
+       so the cache is always accessible.
+    2. ``request.body()`` — fallback for requests not handled by our middleware
+       (e.g. direct TestClient calls or third-party integrations).
+
+    Other rules:
+    - Skipped for GET / HEAD / OPTIONS (no body).
     - Capped at ``config.max_request_body_bytes`` (0 = disabled).
     - Tries JSON decode first; falls back to a plain string.
     - Returns ``None`` on any failure or when disabled.
@@ -40,9 +56,20 @@ async def _request_body(request: Request, config: "FlareConfig") -> Optional[Any
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
     try:
-        raw: bytes = await request.body()
+        # 1. Scope cache (fastest path — populated by BodyCacheMiddleware)
+        raw: bytes = request.scope.get(_SCOPE_BODY_KEY) or b""
+
+        # 2. Fallback: try reading directly (works when receive() is not exhausted)
+        if not raw:
+            raw = await request.body()
+            if raw:
+                # Store in scope so any subsequent call on the same transaction
+                # can retrieve it without re-reading the stream.
+                request.scope[_SCOPE_BODY_KEY] = raw
+
         if not raw:
             return None
+
         raw = raw[: config.max_request_body_bytes]
         try:
             decoded = raw.decode("utf-8", errors="replace")

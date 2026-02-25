@@ -2,8 +2,8 @@
 
 # ⚡ fastapi-flare
 
-**Plug-and-play error tracking & log visualization for FastAPI.**  
-Backed by **Redis Streams** or **SQLite** — self-hosted, no SaaS, no overhead.
+**Lightweight self-hosted observability for FastAPI.**  
+Backed by **Redis Streams** or **SQLite** — no SaaS, no overhead.
 
 <br/>
 

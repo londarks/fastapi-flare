@@ -155,13 +155,22 @@ def setup(
         make_validation_exception_handler,
     )
     from fastapi.exceptions import RequestValidationError
-    from fastapi_flare.middleware import MetricsMiddleware, RequestIdMiddleware
+    from fastapi_flare.middleware import BodyCacheMiddleware, MetricsMiddleware, RequestIdMiddleware
     from fastapi_flare.router import make_router
     from fastapi_flare.worker import FlareWorker
 
-    # Middleware stack (last add_middleware runs outermost = first on request):
-    #   RequestIdMiddleware  → outermost (sets request_id + start_time)
-    #   MetricsMiddleware    → inner (reads start_time after response)
+    # Middleware stack — add_middleware() inserts in reverse, so the LAST call
+    # becomes the outermost layer (first to see the request):
+    #
+    #   RequestIdMiddleware   → outermost: sets request_id + start_time
+    #   MetricsMiddleware     → middle:    records latency/status after response
+    #   BodyCacheMiddleware   → innermost: wraps receive() to store raw body bytes
+    #                           in scope["_flare_body"] BEFORE FastAPI/Pydantic
+    #                           consumes the stream.  Exception handlers receive a
+    #                           *fresh* Request object and can't rely on request._body
+    #                           being set; the scope dict is shared, so they read
+    #                           the cached bytes from there instead.
+    app.add_middleware(BodyCacheMiddleware)
     app.add_middleware(MetricsMiddleware, config=config)
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(HTTPException, make_http_exception_handler(config))

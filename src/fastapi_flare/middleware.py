@@ -7,9 +7,68 @@ from typing import TYPE_CHECKING
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
+
+# Scope key where the raw request bytes are cached for exception handlers.
+# Exception handlers (HTTPException, RequestValidationError, unhandled 500) all
+# receive a **fresh** Request object built from the same scope dict — they do NOT
+# share the _body attribute cached by FastAPI/Pydantic on the routing Request.
+# Storing the bytes here lets _request_body() recover them even after the ASGI
+# receive() callable has been exhausted by the inner app.
+_SCOPE_BODY_KEY = "_flare_body"
+
+# Methods that may carry a body worth capturing.
+_BODY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+class BodyCacheMiddleware:
+    """
+    **Pure ASGI middleware** — wraps the ``receive`` callable to intercept
+    request-body chunks and stores the complete raw bytes in
+    ``scope["_flare_body"]`` **before** FastAPI / Pydantic consume the stream.
+
+    This must be a pure ASGI middleware (not ``BaseHTTPMiddleware``) because
+    ``BaseHTTPMiddleware`` creates its own receive channel and we would lose
+    access to the original stream before the body is cached.
+
+    Registration order (outermost first after ``add_middleware`` reversal)::
+
+        app.add_middleware(RequestIdMiddleware)
+        app.add_middleware(MetricsMiddleware, config=config)
+        app.middleware("http")(...)   # handled by setup()
+
+    ``BodyCacheMiddleware`` is registered as the **innermost** ASGI layer so it
+    runs after Starlette's ``ExceptionMiddleware`` but before the router.  That
+    way the cache is populated on every request before routing occurs.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method", "GET") not in _BODY_METHODS:
+            await self.app(scope, receive, send)
+            return
+
+        # Wrap receive: collect chunks transparently, then cache in scope.
+        body_chunks: list[bytes] = []
+        cached = False
+
+        async def caching_receive() -> dict:
+            nonlocal cached
+            message = await receive()
+            if message.get("type") == "http.request" and not cached:
+                body_chunks.append(message.get("body", b""))
+                if not message.get("more_body", False):
+                    scope[_SCOPE_BODY_KEY] = b"".join(body_chunks)
+                    cached = True
+            return message
+
+        await self.app(scope, caching_receive, send)
+
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
