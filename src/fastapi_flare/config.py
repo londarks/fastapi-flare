@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,7 +48,20 @@ class FlareConfig(BaseSettings):
     dashboard_path: str = "/flare"
     dashboard_title: str = "Flare — Error Logs"
     dashboard_auth_dependency: Optional[Any] = Field(default=None, exclude=True)
+    # ── Storage backend ───────────────────────────────────────────────────────
+    # "redis"  (default) — Redis Streams. Requires a running Redis instance.
+    # "sqlite"            — Local SQLite file. Requires: pip install 'fastapi-flare[sqlite]'
+    #
+    # Environment variable:
+    #   FLARE_STORAGE_BACKEND=sqlite
+    #   FLARE_SQLITE_PATH=/data/flare.db
+    storage_backend: Literal["redis", "sqlite"] = "redis"
+    sqlite_path: str = "flare.db"
 
+    # ── Runtime — set by setup(), never from env ────────────────────────────────
+    # The resolved storage instance; injected after make_storage() in setup().
+    # Excluded from serialization and env-loading.
+    storage_instance: Optional[Any] = Field(default=None, exclude=True)
     # ── Zitadel OAuth2 authentication (optional) ─────────────────────────────
     # When zitadel_domain + zitadel_client_id + zitadel_project_id are set,
     # setup() will automatically protect the /flare dashboard with JWT validation.

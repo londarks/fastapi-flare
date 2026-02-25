@@ -106,20 +106,16 @@ async def push_log(
     context: Optional[dict] = None,
 ) -> None:
     """
-    Fire-and-forget: serializes a log entry to JSON and pushes it to the Redis
-    List buffer via LPUSH. The worker drains this List into the Stream every
-    ``config.worker_interval_seconds`` seconds.
+    Fire-and-forget: builds a log entry dict and hands it to the active
+    storage backend via :meth:`~fastapi_flare.storage.FlareStorageProtocol.enqueue`.
 
-    Never raises. If Redis is unavailable, the entry is silently discarded.
+    The storage backend decides how to persist the entry (Redis LPUSH,
+    SQLite INSERT, etc.). This function never raises.
     """
     if level not in ("ERROR", "WARNING"):
         return
 
     try:
-        client = await _get_client(config)
-        if client is None:
-            return
-
         masked_context = None
         if context:
             masked_context = _mask_sensitive(context, config.sensitive_fields)
@@ -140,7 +136,9 @@ async def push_log(
             "context": masked_context,
         }
 
-        await client.lpush(config.queue_key, json.dumps(entry, default=str))
+        storage = config.storage_instance
+        if storage is not None:
+            await storage.enqueue(entry)
 
     except Exception:
         pass  # Logging must never impact the user's request

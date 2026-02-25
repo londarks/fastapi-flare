@@ -1,11 +1,10 @@
 """
-fastapi-flare — example app.
+fastapi-flare — example app (backend: SQLite).
 
-Demonstra duas conexões: sem auth e com Zitadel.
-Configure as variáveis no .env (copie de .env.example).
-O FlareConfig lê automaticamente as variáveis FLARE_* do .env.
+Nenhuma dependência externa necessária — os logs são gravados em
+``flare_example.db`` (SQLite) na pasta de trabalho atual.
 
-Para rodar sem Zitadel (modo básico)::
+Para rodar::
 
     poetry run uvicorn examples.example:app --reload --port 8000
 
@@ -41,9 +40,17 @@ app = FastAPI(title="fastapi-flare example", docs_url=None, redoc_url=None)
 
 # ── FlareConfig ───────────────────────────────────────────────────────────────────
 #
-# FlareConfig lê as variáveis FLARE_* automaticamente do .env.
+# Escolha o backend de armazenamento:
 #
-# Modo básico (sem auth): apenas FLARE_REDIS_* necessárias.
+#   SQLite (padrão aqui) — não requer Redis:
+#
+#       config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
+#
+#   Redis — recomendado para produção:
+#       Instale: pip install "fastapi-flare"  (Redis já é dependência padrão)
+#       Configure .env com FLARE_REDIS_URL ou passe redis_url diretamente:
+#
+#       config = FlareConfig(storage_backend="redis", redis_url="redis://localhost:6379")
 #
 # Modo Zitadel (dashboard protegido): adicione ao .env:
 #   FLARE_ZITADEL_DOMAIN=auth.mycompany.com
@@ -54,7 +61,13 @@ app = FastAPI(title="fastapi-flare example", docs_url=None, redoc_url=None)
 # automaticamente o Depends de validação JWT no dashboard /flare.
 # Não é necessário nenhum código adicional.
 #
-config = FlareConfig()
+
+# --- SQLite (sem Redis) ---
+config = FlareConfig(storage_backend="sqlite", sqlite_path="flare_example.db")
+
+# --- Redis (produção) ---
+# config = FlareConfig(storage_backend="redis")  # lê FLARE_REDIS_URL do .env
+
 setup(app, config=config)
 
 

@@ -3,7 +3,7 @@
 # ⚡ fastapi-flare
 
 **Plug-and-play error tracking & log visualization for FastAPI.**  
-Backed by **Redis Streams** — no database, no SaaS, no overhead.
+Backed by **Redis Streams** or **SQLite** — self-hosted, no SaaS, no overhead.
 
 <br/>
 
@@ -35,7 +35,7 @@ No external services. No configuration files. No noise.
 | 🚀 **One-line setup** | `setup(app)` and you're done |
 | 🔍 **Auto-capture** | HTTP 4xx/5xx and unhandled Python exceptions |
 | 🖥️ **Admin dashboard** | Built-in at `/flare` — dark theme, filters, pagination |
-| 🗄️ **Redis-only** | Buffer queue (List) + durable storage (Stream) |
+| 🗄️ **Dual storage** | Redis Streams (production) or SQLite (zero-infra) |
 | 🔥 **Fire-and-forget** | Logging never blocks or affects your request handlers |
 | ⚙️ **Background worker** | Async task drains queue to stream every 5 seconds |
 | 🕒 **Retention policies** | Time-based (default 7 days) + count-based (10k entries) |
@@ -47,14 +47,26 @@ No external services. No configuration files. No noise.
 ## Installation
 
 ```bash
+# Redis backend (default)
 pip install fastapi-flare
+
+# SQLite backend (no Redis needed)
+pip install "fastapi-flare[sqlite]"
+
+# Zitadel JWT auth for the dashboard
+pip install "fastapi-flare[auth]"
+
+# Everything
+pip install "fastapi-flare[sqlite,auth]"
 ```
 
-> **Requirements:** Python 3.11+, FastAPI, and a running Redis instance.
+> **Requirements:** Python 3.11+, FastAPI. Redis is only required when using the default `redis` backend.
 
 ---
 
 ## Quick Start
+
+**Redis** (default — production-ready, durable):
 
 ```python
 from fastapi import FastAPI
@@ -64,7 +76,57 @@ app = FastAPI()
 setup(app, redis_url="redis://localhost:6379")
 ```
 
-That's it. Visit **`http://localhost:8000/flare`** to open the error dashboard.
+**SQLite** (zero-infra — no Redis required):
+
+```python
+from fastapi import FastAPI
+from fastapi_flare import FlareConfig, setup
+
+app = FastAPI()
+setup(app, config=FlareConfig(storage_backend="sqlite", sqlite_path="flare.db"))
+```
+
+Visit **`http://localhost:8000/flare`** to open the error dashboard.
+
+---
+
+## Storage Backends
+
+### Redis (default)
+
+Uses a Redis List as buffer queue and a Redis Stream as durable storage. Best for production deployments where Redis is already available.
+
+```python
+setup(app, config=FlareConfig(
+    storage_backend="redis",           # default
+    redis_url="redis://localhost:6379",
+    redis_password=None,
+    stream_key="flare:logs",
+    queue_key="flare:queue",
+))
+```
+
+**Docker:**
+```bash
+docker run -d -p 6379:6379 redis:7
+```
+
+### SQLite
+
+Stores everything in a local `.db` file. No external services, no Docker, no configuration — ideal for local development, small deployments, or air-gapped environments.
+
+```bash
+pip install "fastapi-flare[sqlite]"
+```
+
+```python
+setup(app, config=FlareConfig(
+    storage_backend="sqlite",
+    sqlite_path="flare.db",            # path to the .db file
+))
+```
+
+> The SQLite backend uses WAL mode and indexed queries for efficient reads and writes.
 
 ---
 
@@ -74,13 +136,20 @@ That's it. Visit **`http://localhost:8000/flare`** to open the error dashboard.
 from fastapi_flare import setup, FlareConfig
 
 setup(app, config=FlareConfig(
+    # --- Backend (choose one) ---
+    storage_backend="redis",           # "redis" | "sqlite"
+
+    # Redis options (storage_backend="redis")
     redis_url="redis://localhost:6379",
     redis_password=None,
+    stream_key="flare:logs",
+    queue_key="flare:queue",
 
-    # Storage
-    stream_key="flare:logs",          # Redis Stream key
-    queue_key="flare:queue",          # Redis List buffer key
-    max_entries=10_000,               # Count-based cap (MAXLEN)
+    # SQLite options (storage_backend="sqlite")
+    # sqlite_path="flare.db",
+
+    # --- Shared ---
+    max_entries=10_000,               # Count-based cap
     retention_hours=168,              # Time-based retention (7 days)
 
     # Dashboard
@@ -204,6 +273,14 @@ setup(app, config=FlareConfig(
 
 ## Running the Example
 
+**SQLite mode** (no dependencies):
+
+```bash
+poetry run uvicorn examples.example:app --reload --port 8000
+```
+
+**Redis mode:**
+
 ```bash
 # 1. Copy and configure environment
 cp .env.example .env
@@ -211,7 +288,9 @@ cp .env.example .env
 # 2. Start Redis (Docker)
 docker run -d -p 6379:6379 redis:7
 
-# 3. Run the example app
+# 3. Switch the example to Redis and run
+# In examples/example.py, change:
+#   FlareConfig(storage_backend="redis")  # and set FLARE_REDIS_URL in .env
 poetry run uvicorn examples.example:app --reload --port 8000
 ```
 

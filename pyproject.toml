@@ -14,7 +14,8 @@ dependencies = [
     "pydantic-settings (>=2.0.0)",
     "starlette (>=0.27.0)",
     "scalar-fastapi (>=1.6.2,<2.0.0)",
-    "uvicorn[standard] (>=0.41.0,<0.42.0)"
+    "uvicorn[standard] (>=0.41.0,<0.42.0)",
+    "aiosqlite (>=0.22.1,<0.23.0)"
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,12 @@ dependencies = [
 auth = [
     "httpx (>=0.27.0)",
     "python-jose[cryptography] (>=3.3.0)",
+]
+
+# SQLite storage backend
+# Install with: pip install "fastapi-flare[sqlite]"
+sqlite = [
+    "aiosqlite (>=0.19.0)",
 ]
 
 

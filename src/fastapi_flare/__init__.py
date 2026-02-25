@@ -117,6 +117,10 @@ def setup(
     if config is None:
         config = FlareConfig(redis_url=redis_url) if redis_url else FlareConfig()
 
+    # ── Instantiate storage backend ────────────────────────────────────
+    from fastapi_flare.storage import make_storage
+    config.storage_instance = make_storage(config)
+
     # ── Auto-wire Zitadel auth dependency ────────────────────────────────────
     # Activated when the three required Zitadel fields are present AND the user
     # has not already supplied a custom dashboard_auth_dependency.

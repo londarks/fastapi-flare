@@ -28,6 +28,11 @@ htmlcov/
 dist/
 *.tar.gz
 
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
 # Env files
 .env
 .env.local

@@ -12,3 +12,8 @@ scalar-fastapi>=1.6.2
 # or uncomment the two lines below:
 # httpx>=0.27.0
 # python-jose[cryptography]>=3.3.0
+# ── Optional: SQLite storage backend ───────────────────────────────────
+# Needed only when using storage_backend="sqlite".
+# Install via: pip install "fastapi-flare[sqlite]"
+# or uncomment the line below:
+# aiosqlite>=0.19.0

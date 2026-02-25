@@ -6,11 +6,12 @@ Registers three routes under config.dashboard_path:
   GET /flare/api/logs   → paginated log entries (FlareLogPage)
   GET /flare/api/stats  → summary statistics (FlareStats)
 
+The router speaks only to :class:`~fastapi_flare.storage.FlareStorageProtocol`.
+It has no knowledge of whether Redis, SQLite, or any other backend is in use.
+
 The dashboard HTML contains two placeholder tokens replaced at serve time:
   __FLARE_TITLE__     → config.dashboard_title
   __FLARE_API_BASE__  → config.dashboard_path + "/api"
-
-This avoids a Jinja2 runtime dependency for two string substitutions.
 """
 from __future__ import annotations
 
@@ -53,16 +54,11 @@ def make_router(config) -> APIRouter:
         event: Optional[str] = Query(None),
         search: Optional[str] = Query(None),
     ) -> FlareLogPage:
-        from fastapi_flare.queue import _get_client
-        from fastapi_flare.storage import read_entries
-
-        client = await _get_client(config)
-        if client is None:
+        storage = config.storage_instance
+        if storage is None:
             return FlareLogPage(logs=[], total=0, page=page, limit=limit, pages=0)
 
-        entries, total = await read_entries(
-            client,
-            config,
+        entries, total = await storage.list_logs(
             page=page,
             limit=limit,
             level=level,
@@ -76,21 +72,15 @@ def make_router(config) -> APIRouter:
 
     @router.get("/api/stats", dependencies=deps)
     async def get_stats() -> FlareStats:
-        from fastapi_flare.queue import _get_client, get_queue_length
-        from fastapi_flare.storage import get_stats
-
-        client = await _get_client(config)
-        queue_len = await get_queue_length(config)
-
-        if client is None:
+        storage = config.storage_instance
+        if storage is None:
             return FlareStats(
                 total_entries=0,
                 errors_last_24h=0,
                 warnings_last_24h=0,
-                queue_length=queue_len,
+                queue_length=0,
                 stream_length=0,
             )
-
-        return await get_stats(client, config, queue_len)
+        return await storage.get_stats()
 
     return router
