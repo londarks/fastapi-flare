@@ -379,14 +379,15 @@
     @keyframes flash-val { 0%{background:rgba(220,38,38,.22);border-radius:5px} 100%{background:transparent} }
     .stat-flash { animation: flash-val .7s ease-out; }
 
-    /* ── HEALTH STATUS (sidebar footer) ── */
-    .health-status {
-      margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
-      display: flex; flex-direction: column; gap: 5px;
+    /* ── HEALTH STATUS (header bar) ── */
+    .header-health {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--bg-row); border: 1px solid var(--border-dim);
+      border-radius: 8px; padding: 5px 10px; flex-shrink: 0;
     }
-    .health-row { display: flex; align-items: center; gap: 6px; }
-    .health-label { font-size: 11px; color: var(--gray); width: 48px; flex-shrink: 0; }
-    .health-val   { font-size: 11px; color: var(--gray-light); font-family: var(--mono); }
+    .hh-item { display: flex; align-items: center; gap: 5px; }
+    .hh-val  { font-size: 11px; color: var(--gray-light); font-family: var(--mono); white-space: nowrap; }
+    .hh-sep  { width: 1px; height: 14px; background: var(--border-dim); margin: 0 2px; }
     .health-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
       transition: background .3s;
@@ -395,6 +396,46 @@
     .health-dot.warn    { background: var(--amber); }
     .health-dot.down    { background: var(--red-light); animation: pulse 1s ease-in-out infinite; }
     .health-dot.unknown { background: var(--gray); }
+
+    /* ── USER PROFILE PILL ── */
+    .profile-pill {
+      position: relative; display: flex; align-items: center; gap: 8px;
+      padding: 5px 10px 5px 6px; border-radius: 8px;
+      border: 1px solid var(--border-dim); background: var(--bg-row);
+      cursor: pointer; user-select: none; transition: all .15s; flex-shrink: 0;
+    }
+    .profile-pill:hover { border-color: var(--gray); background: var(--bg-hover); }
+    .profile-avatar {
+      width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+      background: var(--red-dim); border: 1px solid rgba(220,38,38,.35);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: var(--red-light);
+      overflow: hidden;
+    }
+    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .profile-name { font-size: 12px; font-weight: 500; color: var(--white); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .profile-chevron { font-size: 10px; color: var(--gray); transition: transform .2s; }
+    .profile-pill.open .profile-chevron { transform: rotate(180deg); }
+    .profile-dropdown {
+      display: none; position: absolute; top: calc(100% + 6px); right: 0;
+      min-width: 200px; background: var(--bg-card); border: 1px solid var(--border-dim);
+      border-radius: 10px; padding: 6px; z-index: 200;
+      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    }
+    .profile-pill.open .profile-dropdown { display: block; }
+    .profile-dd-header { padding: 8px 10px 10px; }
+    .profile-dd-name  { font-size: 13px; font-weight: 600; color: var(--white); }
+    .profile-dd-email { font-size: 11px; color: var(--gray); margin-top: 1px; word-break: break-all; }
+    .profile-dd-sep   { height: 1px; background: var(--border); margin: 4px 0; }
+    .profile-dd-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; font-size: 13px;
+      color: var(--gray-light); text-decoration: none; cursor: pointer;
+      transition: all .12s; border: none; background: none; width: 100%; text-align: left;
+    }
+    .profile-dd-item:hover { background: var(--bg-hover); color: var(--white); }
+    .profile-dd-item.danger:hover { background: var(--red-dim); color: var(--red-light); }
+    .profile-dd-item i { font-size: 12px; width: 14px; text-align: center; }
 
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
@@ -426,7 +467,53 @@
   </div>
 
   <div class="header-right">
+    <div class="header-health" id="healthStatus">
+      <div class="hh-item">
+        <div class="health-dot unknown" id="hDotStorage"></div>
+        <span class="hh-val" id="hValStorage">—</span>
+      </div>
+      <div class="hh-sep"></div>
+      <div class="hh-item">
+        <div class="health-dot unknown" id="hDotWorker"></div>
+        <span class="hh-val" id="hValWorker">—</span>
+      </div>
+      <div class="hh-sep"></div>
+      <div class="hh-item">
+        <div class="health-dot unknown" id="hDotQueue"></div>
+        <span class="hh-val" id="hValQueue">—</span>
+      </div>
+    </div>
+
     {% block header_right %}{% endblock %}
+
+    {% if current_user is defined %}
+    <div class="profile-pill" id="profilePill">
+      <div class="profile-avatar" id="profileAvatar">
+        {% if current_user.picture %}
+          <img src="{{ current_user.picture }}" alt="" onerror="this.parentElement.textContent='{{ (current_user.name or 'A')[0] | upper }}'" />
+        {% else %}
+          {{ (current_user.name or 'A')[0] | upper }}
+        {% endif %}
+      </div>
+      <span class="profile-name">{{ current_user.name }}</span>
+      <i class="fas fa-chevron-down profile-chevron"></i>
+
+      <div class="profile-dropdown">
+        <div class="profile-dd-header">
+          <div class="profile-dd-name">{{ current_user.name }}</div>
+          {% if current_user.email %}
+          <div class="profile-dd-email">{{ current_user.email }}</div>
+          {% endif %}
+        </div>
+        {% if logout_path %}
+        <div class="profile-dd-sep"></div>
+        <a href="{{ logout_path }}" class="profile-dd-item danger">
+          <i class="fas fa-right-from-bracket"></i> Logout
+        </a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
   </div>
 </header>
 
@@ -450,23 +537,6 @@
   <div class="sidebar-footer">
     <i class="fas fa-fire-flame-curved"></i>
     <span>fastapi-flare</span>
-  </div>
-  <div class="health-status" id="healthStatus">
-    <div class="health-row">
-      <div class="health-dot unknown" id="hDotStorage"></div>
-      <span class="health-label">Storage</span>
-      <span class="health-val" id="hValStorage">—</span>
-    </div>
-    <div class="health-row">
-      <div class="health-dot unknown" id="hDotWorker"></div>
-      <span class="health-label">Worker</span>
-      <span class="health-val" id="hValWorker">—</span>
-    </div>
-    <div class="health-row">
-      <div class="health-dot unknown" id="hDotQueue"></div>
-      <span class="health-label">Queue</span>
-      <span class="health-val" id="hValQueue">—</span>
-    </div>
   </div>
 </aside>
 
@@ -597,6 +667,22 @@ function formatRelativeDate(iso) {
 
   pollHealth();
   setInterval(pollHealth, 30000);
+})();
+</script>
+
+<script>
+/* ── PROFILE PILL DROPDOWN ─────────────────────────────────────────────── */
+(function () {
+  var pill = document.getElementById('profilePill');
+  if (!pill) return;
+  pill.addEventListener('click', function (e) {
+    // Don't toggle if user clicked a link inside dropdown
+    if (e.target.closest('a')) return;
+    pill.classList.toggle('open');
+  });
+  document.addEventListener('click', function (e) {
+    if (!pill.contains(e.target)) pill.classList.remove('open');
+  });
 })();
 </script>
 

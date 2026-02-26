@@ -141,6 +141,19 @@ def make_router(config) -> APIRouter:
 
         # -- Dashboard: Errors ------------------------------------------------
 
+        _logout_path = config.dashboard_path + "/auth/logout"
+
+        def _user_context(request: Request) -> dict:
+            u = request.session.get("user") or {}
+            return {
+                "current_user": {
+                    "name":    u.get("name") or u.get("given_name") or "User",
+                    "email":   u.get("email", ""),
+                    "picture": u.get("picture", ""),
+                },
+                "logout_path": _logout_path,
+            }
+
         @router.get("")
         async def dashboard(request: Request):
             if not _session_valid(request):
@@ -157,6 +170,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "errors",
+                    **_user_context(request),
                 },
             )
 
@@ -178,6 +192,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "metrics",
+                    **_user_context(request),
                 },
             )
 
@@ -199,6 +214,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "storage",
+                    **_user_context(request),
                 },
             )
 
@@ -265,6 +281,11 @@ def make_router(config) -> APIRouter:
 
         api_deps = deps
 
+        _admin_user_ctx = {
+            "current_user": {"name": "Admin", "email": "", "picture": ""},
+            "logout_path":  None,
+        }
+
         # -- Dashboard: Errors ------------------------------------------------
 
         @router.get("", dependencies=deps)
@@ -279,6 +300,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "errors",
+                    **_admin_user_ctx,
                 },
             )
 
@@ -296,6 +318,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "metrics",
+                    **_admin_user_ctx,
                 },
             )
 
@@ -313,6 +336,7 @@ def make_router(config) -> APIRouter:
                     "metrics_path": _metrics_path,
                     "storage_path": _storage_path,
                     "active_tab":   "storage",
+                    **_admin_user_ctx,
                 },
             )
 
