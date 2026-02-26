@@ -77,6 +77,14 @@ class FlareStats(BaseModel):
     newest_entry_ts: Optional[datetime] = None
 
 
+class FlareStorageActionResult(BaseModel):
+    """Response returned by storage maintenance endpoints (trim, clear)."""
+
+    ok: bool
+    action: str
+    detail: str = ""
+
+
 class FlareHealthReport(BaseModel):
     """Health report returned by GET /flare/health."""
 

@@ -111,3 +111,15 @@ class FlareStorageProtocol(Protocol):
         ``queue_size`` is the number of entries currently buffered (0 for SQLite).
         """
         ...
+
+    async def clear(self) -> tuple[bool, str]:
+        """
+        Permanently delete all stored log entries from this backend.
+
+        For Redis: DEL stream_key + DEL queue_key.
+        For SQLite: DELETE FROM logs + VACUUM.
+
+        Returns:
+            ``(ok: bool, detail: str)``
+        """
+        ...

@@ -31,6 +31,7 @@ from fastapi_flare.schema import (
     FlareLogPage,
     FlareMetricsSnapshot,
     FlareStats,
+    FlareStorageActionResult,
 )
 
 _TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
@@ -315,6 +316,27 @@ def make_router(config) -> APIRouter:
             at_capacity=m.at_capacity,
             max_endpoints=m._max_endpoints,
         )
+
+    @router.post("/api/storage/trim", dependencies=api_deps)
+    async def storage_trim() -> FlareStorageActionResult:
+        """Immediately apply retention policies (time-based + count-based trim)."""
+        storage = config.storage_instance
+        if storage is None:
+            return FlareStorageActionResult(ok=False, action="trim", detail="No storage backend configured")
+        try:
+            await storage.flush()
+            return FlareStorageActionResult(ok=True, action="trim", detail="Retention policies applied")
+        except Exception as exc:
+            return FlareStorageActionResult(ok=False, action="trim", detail=str(exc))
+
+    @router.post("/api/storage/clear", dependencies=api_deps)
+    async def storage_clear() -> FlareStorageActionResult:
+        """Permanently delete ALL log entries from storage. Irreversible."""
+        storage = config.storage_instance
+        if storage is None:
+            return FlareStorageActionResult(ok=False, action="clear", detail="No storage backend configured")
+        ok, detail = await storage.clear()
+        return FlareStorageActionResult(ok=ok, action="clear", detail=detail)
 
     return router
 

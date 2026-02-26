@@ -194,6 +194,21 @@ class SQLiteStorage:
         except Exception as exc:
             return False, str(exc), 0
 
+    async def clear(self) -> tuple[bool, str]:
+        """
+        Delete all rows from the logs table and reclaim disk space via VACUUM.
+        Returns (ok, detail).
+        """
+        try:
+            db = await self._ensure_db()
+            cur = await db.execute("DELETE FROM logs")
+            deleted = cur.rowcount
+            await db.commit()
+            await db.execute("VACUUM")
+            return True, f"Deleted {deleted} row(s) and reclaimed disk space"
+        except Exception as exc:
+            return False, str(exc)
+
     async def close(self) -> None:
         """Close the SQLite connection."""
         if self._db is not None:

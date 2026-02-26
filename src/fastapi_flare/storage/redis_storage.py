@@ -265,6 +265,24 @@ class RedisStorage:
         except Exception as exc:
             return False, str(exc), 0
 
+    async def clear(self) -> tuple[bool, str]:
+        """
+        Delete the Redis stream and queue buffer entirely.
+        Returns (ok, detail).
+        """
+        try:
+            client = await _get_client(self._config)
+            if client is None:
+                return False, "Redis client unavailable"
+            pipe = client.pipeline()
+            pipe.delete(self._config.stream_key)
+            pipe.delete(self._config.queue_key)
+            results = await pipe.execute()
+            deleted = sum(int(r or 0) for r in results)
+            return True, f"Deleted stream + queue ({deleted} keys cleared)"
+        except Exception as exc:
+            return False, str(exc)
+
     async def close(self) -> None:
         """Close the cached Redis connection for this config."""
         key = _cache_key(self._config)
