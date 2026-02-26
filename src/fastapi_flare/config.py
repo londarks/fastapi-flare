@@ -75,6 +75,8 @@ class FlareConfig(BaseSettings):
     storage_instance: Optional[Any] = Field(default=None, exclude=True)
     # In-memory metrics aggregator; injected by setup().
     metrics_instance: Optional[Any] = Field(default=None, exclude=True)
+    # Background worker; injected by setup().
+    worker_instance: Optional[Any] = Field(default=None, exclude=True)
     # ── Zitadel OAuth2 authentication (optional) ─────────────────────────────
     # When zitadel_domain + zitadel_client_id + zitadel_project_id are set,
     # setup() will automatically protect the /flare dashboard with JWT validation.

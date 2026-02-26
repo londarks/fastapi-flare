@@ -24,6 +24,17 @@ class FlareWorker:
     def __init__(self, config: "FlareConfig") -> None:
         self._config = config
         self._task: Optional[asyncio.Task] = None
+        self._flush_cycles: int = 0
+
+    @property
+    def is_running(self) -> bool:
+        """True when the background loop task is alive."""
+        return self._task is not None and not self._task.done()
+
+    @property
+    def flush_cycles(self) -> int:
+        """Total number of successful flush() iterations so far."""
+        return self._flush_cycles
 
     # ── Internals ────────────────────────────────────────────────────────────
 
@@ -39,6 +50,7 @@ class FlareWorker:
         while True:
             try:
                 await self._flush()
+                self._flush_cycles += 1
             except asyncio.CancelledError:
                 raise
             except Exception:

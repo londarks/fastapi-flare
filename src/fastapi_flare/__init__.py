@@ -209,6 +209,7 @@ def setup(
         app.include_router(make_callback_router(config))
 
     worker = FlareWorker(config)
+    config.worker_instance = worker
     _wrap_lifespan(app, worker)
 
     return config

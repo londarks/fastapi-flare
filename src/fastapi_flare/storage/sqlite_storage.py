@@ -182,6 +182,18 @@ class SQLiteStorage:
         except Exception:
             pass
 
+    async def health(self) -> tuple[bool, str, int]:
+        """
+        Execute a lightweight SELECT 1 to verify the database is reachable.
+        Returns (ok, error_msg, queue_size=0).
+        """
+        try:
+            db = await self._ensure_db()
+            await db.execute("SELECT 1")
+            return True, "", 0
+        except Exception as exc:
+            return False, str(exc), 0
+
     async def close(self) -> None:
         """Close the SQLite connection."""
         if self._db is not None:

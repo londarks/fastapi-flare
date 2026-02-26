@@ -252,6 +252,25 @@
     .live-dot { width: 7px; height: 7px; background: var(--red); border-radius: 50%; animation: pulse 1s ease-in-out infinite; flex-shrink: 0; }
     .live-dot.off { background: var(--gray); animation: none; }
 
+    /* ── HEALTH PILL ── */
+    .health-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 5px 11px; border-radius: 99px;
+      border: 1px solid var(--border-dim);
+      font-size: 11px; color: var(--gray-light);
+      cursor: default; user-select: none;
+      transition: border-color .2s;
+    }
+    .health-pill:hover { border-color: var(--gray); }
+    .health-pill .health-dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+      transition: background .3s;
+    }
+    .health-pill .health-dot.ok      { background: var(--green); }
+    .health-pill .health-dot.warn    { background: var(--amber); }
+    .health-pill .health-dot.down    { background: var(--red-light); animation: pulse 1s ease-in-out infinite; }
+    .health-pill .health-dot.unknown { background: var(--gray); }
+
     /* ── SKELETON ROWS ── */
     .skel {
       height: 12px; border-radius: 4px; display: inline-block;
@@ -334,6 +353,11 @@
     <span>__FLARE_TITLE__</span>
   </div>
   <div class="header-right">
+    <!-- Health status pill -->
+    <div class="health-pill" id="healthPill" title="Checking health…">
+      <div class="health-dot unknown" id="hDotOverall"></div>
+      <span id="hPillText">Health</span>
+    </div>
     <label class="refresh-toggle" title="Auto-refresh every 30s">
       <div class="live-dot off" id="liveDot"></div>
       <span id="refreshLabel">Auto-refresh</span>
@@ -818,6 +842,54 @@
       if (s) { s.focus(); s.select(); }
     }
   });
+
+  /* ── HEALTH POLLER ── */
+  (function () {
+    const HEALTH_URL = API_BASE.replace('/api', '/health');
+    if (!HEALTH_URL || HEALTH_URL === '/health') return;
+
+    function applyHealth(d) {
+      const dot  = document.getElementById('hDotOverall');
+      const txt  = document.getElementById('hPillText');
+      const pill = document.getElementById('healthPill');
+      if (!dot) return;
+
+      if (d.status === 'ok') {
+        dot.className = 'health-dot ok';
+        if (txt) txt.textContent = 'Healthy';
+      } else if (d.status === 'degraded') {
+        dot.className = 'health-dot warn';
+        if (txt) txt.textContent = 'Degraded';
+      } else {
+        dot.className = 'health-dot down';
+        if (txt) txt.textContent = 'Down';
+      }
+
+      const lines = [
+        `Storage (${d.storage_backend}): ${d.storage}${d.storage_error ? ' — ' + d.storage_error : ''}`,
+        `Worker: ${d.worker_running ? 'running' : 'stopped'}${d.worker_flush_cycles ? ' (' + d.worker_flush_cycles + ' cycles)' : ''}`,
+        `Queue: ${d.queue_size} pending`,
+      ];
+      if (pill) pill.title = lines.join('\n');
+    }
+
+    function pollHealth() {
+      fetch(HEALTH_URL)
+        .then(r => r.json())
+        .then(d => applyHealth(d))
+        .catch(() => {
+          const dot = document.getElementById('hDotOverall');
+          const txt = document.getElementById('hPillText');
+          if (dot) dot.className = 'health-dot down';
+          if (txt) txt.textContent = 'Health err';
+          const pill = document.getElementById('healthPill');
+          if (pill) pill.title = 'Health check failed';
+        });
+    }
+
+    pollHealth();
+    setInterval(pollHealth, 30000);
+  })();
 </script>
 </body>
 </html>

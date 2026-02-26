@@ -379,6 +379,23 @@
     @keyframes flash-val { 0%{background:rgba(220,38,38,.22);border-radius:5px} 100%{background:transparent} }
     .stat-flash { animation: flash-val .7s ease-out; }
 
+    /* ── HEALTH STATUS (sidebar footer) ── */
+    .health-status {
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .health-row { display: flex; align-items: center; gap: 6px; }
+    .health-label { font-size: 11px; color: var(--gray); width: 48px; flex-shrink: 0; }
+    .health-val   { font-size: 11px; color: var(--gray-light); font-family: var(--mono); }
+    .health-dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+      transition: background .3s;
+    }
+    .health-dot.ok      { background: var(--green); }
+    .health-dot.warn    { background: var(--amber); }
+    .health-dot.down    { background: var(--red-light); animation: pulse 1s ease-in-out infinite; }
+    .health-dot.unknown { background: var(--gray); }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, 1fr); }
@@ -429,6 +446,23 @@
   <div class="sidebar-footer">
     <i class="fas fa-fire-flame-curved"></i>
     <span>fastapi-flare</span>
+  </div>
+  <div class="health-status" id="healthStatus">
+    <div class="health-row">
+      <div class="health-dot unknown" id="hDotStorage"></div>
+      <span class="health-label">Storage</span>
+      <span class="health-val" id="hValStorage">—</span>
+    </div>
+    <div class="health-row">
+      <div class="health-dot unknown" id="hDotWorker"></div>
+      <span class="health-label">Worker</span>
+      <span class="health-val" id="hValWorker">—</span>
+    </div>
+    <div class="health-row">
+      <div class="health-dot unknown" id="hDotQueue"></div>
+      <span class="health-label">Queue</span>
+      <span class="health-val" id="hValQueue">—</span>
+    </div>
   </div>
 </aside>
 
@@ -519,6 +553,47 @@ function formatRelativeDate(iso) {
   else                  rel = d.toLocaleDateString();
   return '<span title="' + abs + '" style="cursor:default">' + rel + '</span>';
 }
+
+/* Health poller */
+(function () {
+  var HEALTH_URL = '{{ api_base }}'.replace('/api', '/health');
+  if (!HEALTH_URL || HEALTH_URL === '/health') return;
+
+  function setDot(id, state) {
+    var el = document.getElementById(id);
+    if (el) el.className = 'health-dot ' + state;
+  }
+  function setVal(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  function applyHealth(d) {
+    /* Storage */
+    setDot('hDotStorage', d.storage === 'ok' ? 'ok' : 'down');
+    setVal('hValStorage', (d.storage_backend || '') + (d.storage === 'ok' ? ' ok' : ' err'));
+    /* Worker */
+    setDot('hDotWorker', d.worker_running ? 'ok' : 'down');
+    setVal('hValWorker', d.worker_running ? 'running' : 'stopped');
+    /* Queue */
+    var qstate = d.queue_size > 100 ? 'down' : d.queue_size > 20 ? 'warn' : 'ok';
+    setDot('hDotQueue', qstate);
+    setVal('hValQueue', d.queue_size + ' pending');
+  }
+
+  function pollHealth() {
+    fetch(HEALTH_URL)
+      .then(function (r) { return r.json(); })
+      .then(function (d) { applyHealth(d); })
+      .catch(function () {
+        ['hDotStorage', 'hDotWorker', 'hDotQueue'].forEach(function (id) { setDot(id, 'down'); });
+        ['hValStorage', 'hValWorker', 'hValQueue'].forEach(function (id) { setVal(id, 'err'); });
+      });
+  }
+
+  pollHealth();
+  setInterval(pollHealth, 30000);
+})();
 </script>
 
 <script>

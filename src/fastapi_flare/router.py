@@ -27,6 +27,7 @@ from starlette.templating import Jinja2Templates
 
 from fastapi_flare.schema import (
     FlareEndpointMetric,
+    FlareHealthReport,
     FlareLogPage,
     FlareMetricsSnapshot,
     FlareStats,
@@ -43,6 +44,58 @@ def make_router(config) -> APIRouter:
     _errors_path  = config.dashboard_path
     _metrics_path = config.dashboard_path + "/metrics"
     _api_base     = config.dashboard_path + "/api"
+
+    # ── PUBLIC: Health Check (no auth required) ───────────────────────────
+    @router.get("/health", response_model=FlareHealthReport, include_in_schema=True)
+    async def health_check():
+        """
+        Returns the operational status of the fastapi-flare subsystems.
+
+        This endpoint is **public** by design — no authentication required —
+        so it can be polled by monitoring tools (Uptime Kuma, Kubernetes
+        liveness probes, Betterstack, etc.).
+
+        ``status`` values:
+          - ``ok``       — storage reachable and worker running.
+          - ``degraded`` — worker stopped but storage is ok, or vice-versa.
+          - ``down``     — storage is unreachable.
+        """
+        storage     = config.storage_instance
+        worker      = config.worker_instance
+        backend     = config.storage_backend  # "redis" | "sqlite"
+
+        worker_running  = worker.is_running  if worker  else False
+        flush_cycles    = worker.flush_cycles if worker else 0
+
+        if storage is None:
+            return FlareHealthReport(
+                status="down",
+                storage_backend=backend,
+                storage="error",
+                storage_error="Storage not initialised",
+                worker_running=worker_running,
+                worker_flush_cycles=flush_cycles,
+                queue_size=0,
+            )
+
+        storage_ok, storage_error, queue_size = await storage.health()
+
+        if not storage_ok:
+            overall = "down"
+        elif not worker_running:
+            overall = "degraded"
+        else:
+            overall = "ok"
+
+        return FlareHealthReport(
+            status=overall,
+            storage_backend=backend,
+            storage="ok" if storage_ok else "error",
+            storage_error=storage_error or None,
+            worker_running=worker_running,
+            worker_flush_cycles=flush_cycles,
+            queue_size=queue_size,
+        )
 
     # =========================================================================
     # MODO BROWSER (PKCE) — zitadel_redirect_uri definido

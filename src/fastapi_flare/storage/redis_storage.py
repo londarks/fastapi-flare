@@ -250,6 +250,21 @@ class RedisStorage:
         except Exception:
             pass
 
+    async def health(self) -> tuple[bool, str, int]:
+        """
+        Ping Redis and return queue depth.
+        Returns (ok, error_msg, queue_size).
+        """
+        try:
+            client = await _get_client(self._config)
+            if client is None:
+                return False, "Redis client unavailable (connection failed at startup)", 0
+            await client.ping()
+            queue_size = await client.llen(self._config.queue_key)
+            return True, "", int(queue_size)
+        except Exception as exc:
+            return False, str(exc), 0
+
     async def close(self) -> None:
         """Close the cached Redis connection for this config."""
         key = _cache_key(self._config)

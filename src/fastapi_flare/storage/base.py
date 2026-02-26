@@ -98,3 +98,16 @@ class FlareStorageProtocol(Protocol):
         backends without an explicit queue (e.g. SQLite) this is always 0.
         """
         ...
+
+    async def health(self) -> tuple[bool, str, int]:
+        """
+        Probe the storage backend to confirm it is reachable and writable.
+
+        Returns:
+            ``(ok: bool, error_msg: str | "", queue_size: int)``
+
+        ``ok`` is True when the backend responds correctly.
+        ``error_msg`` is empty on success, or a short human-readable message.
+        ``queue_size`` is the number of entries currently buffered (0 for SQLite).
+        """
+        ...

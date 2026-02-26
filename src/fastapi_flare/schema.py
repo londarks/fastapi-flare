@@ -74,3 +74,15 @@ class FlareStats(BaseModel):
     stream_length: int
     oldest_entry_ts: Optional[datetime] = None
     newest_entry_ts: Optional[datetime] = None
+
+
+class FlareHealthReport(BaseModel):
+    """Health report returned by GET /flare/health."""
+
+    status: Literal["ok", "degraded", "down"]
+    storage_backend: str
+    storage: Literal["ok", "error"]
+    storage_error: Optional[str] = None
+    worker_running: bool
+    worker_flush_cycles: int
+    queue_size: int
