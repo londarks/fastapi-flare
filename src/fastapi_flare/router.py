@@ -143,6 +143,17 @@ def make_router(config) -> APIRouter:
 
         _logout_path = config.dashboard_path + "/auth/logout"
 
+        def _base_ctx(active: str, request: Request) -> dict:
+            return {
+                "title":        config.dashboard_title,
+                "api_base":     _api_base,
+                "errors_path":  _errors_path,
+                "metrics_path": _metrics_path,
+                "storage_path": _storage_path,
+                "active_tab":   active,
+                **_user_context(request),
+            }
+
         def _user_context(request: Request) -> dict:
             u = request.session.get("user") or {}
             return {
@@ -157,66 +168,20 @@ def make_router(config) -> APIRouter:
         @router.get("")
         async def dashboard(request: Request):
             if not _session_valid(request):
-                return RedirectResponse(
-                    url=f"{_login_path}?return_to={_errors_path}", status_code=302
-                )
-            return _templates.TemplateResponse(
-                request=request,
-                name="errors.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "errors",
-                    **_user_context(request),
-                },
-            )
-
-        # -- Dashboard: Metrics -----------------------------------------------
+                return RedirectResponse(url=f"{_login_path}?return_to={_errors_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="errors.html",  context=_base_ctx("errors",  request))
 
         @router.get("/metrics")
         async def metrics_dashboard(request: Request):
             if not _session_valid(request):
-                return RedirectResponse(
-                    url=f"{_login_path}?return_to={_metrics_path}", status_code=302
-                )
-            return _templates.TemplateResponse(
-                request=request,
-                name="metrics.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "metrics",
-                    **_user_context(request),
-                },
-            )
-
-        # -- Dashboard: Storage -----------------------------------------------
+                return RedirectResponse(url=f"{_login_path}?return_to={_metrics_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="metrics.html", context=_base_ctx("metrics", request))
 
         @router.get("/storage")
         async def storage_dashboard_auth(request: Request):
             if not _session_valid(request):
-                return RedirectResponse(
-                    url=f"{_login_path}?return_to={_storage_path}", status_code=302
-                )
-            return _templates.TemplateResponse(
-                request=request,
-                name="storage.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "storage",
-                    **_user_context(request),
-                },
-            )
+                return RedirectResponse(url=f"{_login_path}?return_to={_storage_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="storage.html", context=_base_ctx("storage", request))
 
         # -- Auth: Login — inicia fluxo PKCE ----------------------------------
 
@@ -281,64 +246,29 @@ def make_router(config) -> APIRouter:
 
         api_deps = deps
 
-        _admin_user_ctx = {
+        _admin_ctx_base = {
+            "api_base":     _api_base,
+            "errors_path":  _errors_path,
+            "metrics_path": _metrics_path,
+            "storage_path": _storage_path,
             "current_user": {"name": "Admin", "email": "", "picture": ""},
             "logout_path":  None,
         }
 
-        # -- Dashboard: Errors ------------------------------------------------
+        def _admin_ctx(active: str) -> dict:
+            return {"title": config.dashboard_title, "active_tab": active, **_admin_ctx_base}
 
         @router.get("", dependencies=deps)
         async def dashboard(request: Request):
-            return _templates.TemplateResponse(
-                request=request,
-                name="errors.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "errors",
-                    **_admin_user_ctx,
-                },
-            )
-
-        # -- Dashboard: Metrics -----------------------------------------------
+            return _templates.TemplateResponse(request=request, name="errors.html",  context=_admin_ctx("errors"))
 
         @router.get("/metrics", dependencies=deps)
         async def metrics_dashboard(request: Request):
-            return _templates.TemplateResponse(
-                request=request,
-                name="metrics.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "metrics",
-                    **_admin_user_ctx,
-                },
-            )
-
-        # -- Dashboard: Storage -----------------------------------------------
+            return _templates.TemplateResponse(request=request, name="metrics.html", context=_admin_ctx("metrics"))
 
         @router.get("/storage", dependencies=deps)
         async def storage_dashboard(request: Request):
-            return _templates.TemplateResponse(
-                request=request,
-                name="storage.html",
-                context={
-                    "title":        config.dashboard_title,
-                    "api_base":     _api_base,
-                    "errors_path":  _errors_path,
-                    "metrics_path": _metrics_path,
-                    "storage_path": _storage_path,
-                    "active_tab":   "storage",
-                    **_admin_user_ctx,
-                },
-            )
+            return _templates.TemplateResponse(request=request, name="storage.html", context=_admin_ctx("storage"))
 
     # =========================================================================
     # ROTAS /api — compartilhadas por ambos os modos
