@@ -85,6 +85,29 @@ class FlareStorageActionResult(BaseModel):
     detail: str = ""
 
 
+class FlareStorageOverview(BaseModel):
+    """Runtime snapshot of the active storage backend for GET /flare/api/storage/overview."""
+
+    backend: str
+    connected: bool
+    error: Optional[str] = None
+    # Retention config (always present)
+    max_entries: int = 0
+    retention_hours: int = 0
+    # Redis-specific
+    stream_key: Optional[str] = None
+    stream_length: Optional[int] = None
+    queue_key: Optional[str] = None
+    queue_size: Optional[int] = None
+    memory_bytes: Optional[int] = None
+    last_entry_ts: Optional[str] = None
+    # SQLite-specific
+    db_path: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    row_count: Optional[int] = None
+    wal_active: Optional[bool] = None
+
+
 class FlareHealthReport(BaseModel):
     """Health report returned by GET /flare/health."""
 

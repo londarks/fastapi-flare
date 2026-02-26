@@ -32,6 +32,7 @@ from fastapi_flare.schema import (
     FlareMetricsSnapshot,
     FlareStats,
     FlareStorageActionResult,
+    FlareStorageOverview,
 )
 
 _TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
@@ -44,6 +45,7 @@ def make_router(config) -> APIRouter:
 
     _errors_path  = config.dashboard_path
     _metrics_path = config.dashboard_path + "/metrics"
+    _storage_path = config.dashboard_path + "/storage"
     _api_base     = config.dashboard_path + "/api"
 
     # ── PUBLIC: Health Check (no auth required) ───────────────────────────
@@ -153,6 +155,7 @@ def make_router(config) -> APIRouter:
                     "api_base":     _api_base,
                     "errors_path":  _errors_path,
                     "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
                     "active_tab":   "errors",
                 },
             )
@@ -173,7 +176,29 @@ def make_router(config) -> APIRouter:
                     "api_base":     _api_base,
                     "errors_path":  _errors_path,
                     "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
                     "active_tab":   "metrics",
+                },
+            )
+
+        # -- Dashboard: Storage -----------------------------------------------
+
+        @router.get("/storage")
+        async def storage_dashboard_auth(request: Request):
+            if not _session_valid(request):
+                return RedirectResponse(
+                    url=f"{_login_path}?return_to={_storage_path}", status_code=302
+                )
+            return _templates.TemplateResponse(
+                request=request,
+                name="storage.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
+                    "active_tab":   "storage",
                 },
             )
 
@@ -252,6 +277,7 @@ def make_router(config) -> APIRouter:
                     "api_base":     _api_base,
                     "errors_path":  _errors_path,
                     "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
                     "active_tab":   "errors",
                 },
             )
@@ -268,7 +294,25 @@ def make_router(config) -> APIRouter:
                     "api_base":     _api_base,
                     "errors_path":  _errors_path,
                     "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
                     "active_tab":   "metrics",
+                },
+            )
+
+        # -- Dashboard: Storage -----------------------------------------------
+
+        @router.get("/storage", dependencies=deps)
+        async def storage_dashboard(request: Request):
+            return _templates.TemplateResponse(
+                request=request,
+                name="storage.html",
+                context={
+                    "title":        config.dashboard_title,
+                    "api_base":     _api_base,
+                    "errors_path":  _errors_path,
+                    "metrics_path": _metrics_path,
+                    "storage_path": _storage_path,
+                    "active_tab":   "storage",
                 },
             )
 
@@ -337,6 +381,24 @@ def make_router(config) -> APIRouter:
             return FlareStorageActionResult(ok=False, action="clear", detail="No storage backend configured")
         ok, detail = await storage.clear()
         return FlareStorageActionResult(ok=ok, action="clear", detail=detail)
+
+    @router.get("/api/storage/overview", dependencies=api_deps)
+    async def storage_overview() -> FlareStorageOverview:
+        """Return runtime stats for the active storage backend."""
+        storage = config.storage_instance
+        if storage is None:
+            return FlareStorageOverview(
+                backend=config.storage_backend, connected=False,
+                error="No storage backend configured",
+                max_entries=config.max_entries, retention_hours=config.retention_hours,
+            )
+        data = await storage.overview()
+        return FlareStorageOverview(
+            backend=config.storage_backend,
+            max_entries=config.max_entries,
+            retention_hours=config.retention_hours,
+            **data,
+        )
 
     return router
 

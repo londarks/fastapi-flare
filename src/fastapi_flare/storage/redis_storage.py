@@ -283,6 +283,58 @@ class RedisStorage:
         except Exception as exc:
             return False, str(exc)
 
+    async def overview(self) -> dict:
+        """Return a runtime snapshot dict for the Redis backend."""
+        config = self._config
+        try:
+            client = await _get_client(config)
+            if client is None:
+                return {"connected": False, "error": "Redis client unavailable"}
+
+            # Run length queries together; memory_usage and xrevrange may fail
+            # on an empty/missing key so we isolate them with individual try/except.
+            pipe = client.pipeline()
+            pipe.xlen(config.stream_key)
+            pipe.llen(config.queue_key)
+            counts = await pipe.execute()
+            stream_length = int(counts[0]) if counts[0] is not None else 0
+            queue_size    = int(counts[1]) if counts[1] is not None else 0
+
+            memory_bytes: Optional[int] = None
+            try:
+                mem_raw = await client.memory_usage(config.stream_key)
+                if mem_raw is not None:
+                    memory_bytes = int(mem_raw)
+            except Exception:
+                pass
+
+            last_entry_ts: Optional[str] = None
+            try:
+                last_entries = await client.xrevrange(config.stream_key, count=1)
+                if last_entries:
+                    entry_id = last_entries[0][0]
+                    if isinstance(entry_id, bytes):
+                        entry_id = entry_id.decode()
+                    ts_ms = int(entry_id.split("-")[0])
+                    last_entry_ts = datetime(
+                        *__import__("time").gmtime(ts_ms // 1000)[:6],
+                        tzinfo=timezone.utc,
+                    ).isoformat()
+            except Exception:
+                pass
+
+            return {
+                "connected":     True,
+                "stream_key":    config.stream_key,
+                "stream_length": stream_length,
+                "queue_key":     config.queue_key,
+                "queue_size":    queue_size,
+                "memory_bytes":  memory_bytes,
+                "last_entry_ts": last_entry_ts,
+            }
+        except Exception as exc:
+            return {"connected": False, "error": str(exc)}
+
     async def close(self) -> None:
         """Close the cached Redis connection for this config."""
         key = _cache_key(self._config)

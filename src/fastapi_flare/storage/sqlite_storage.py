@@ -209,6 +209,34 @@ class SQLiteStorage:
         except Exception as exc:
             return False, str(exc)
 
+    async def overview(self) -> dict:
+        """Return a runtime snapshot dict for the SQLite backend."""
+        import os
+        config = self._config
+        try:
+            db = await self._ensure_db()
+
+            cur = await db.execute("SELECT COUNT(*) FROM logs")
+            row = await cur.fetchone()
+            row_count = row[0] if row else 0
+
+            cur = await db.execute("PRAGMA journal_mode")
+            jrow = await cur.fetchone()
+            wal_active = (jrow[0].lower() == "wal") if jrow else False
+
+            path = str(config.sqlite_path)
+            file_size = os.path.getsize(path) if os.path.exists(path) else 0
+
+            return {
+                "connected":       True,
+                "db_path":         path,
+                "file_size_bytes": file_size,
+                "row_count":       row_count,
+                "wal_active":      wal_active,
+            }
+        except Exception as exc:
+            return {"connected": False, "error": str(exc)}
+
     async def close(self) -> None:
         """Close the SQLite connection."""
         if self._db is not None:

@@ -123,3 +123,14 @@ class FlareStorageProtocol(Protocol):
             ``(ok: bool, detail: str)``
         """
         ...
+
+    async def overview(self) -> dict:
+        """
+        Return a dict of runtime stats for this storage backend.
+
+        The dict is passed directly into ``FlareStorageOverview`` by the router.
+        Keys vary by backend — Redis returns stream/queue/memory data;
+        SQLite returns file path, size, row count and WAL status.
+        Always includes ``connected: bool`` and optionally ``error: str``.
+        """
+        ...

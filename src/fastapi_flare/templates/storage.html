@@ -1,0 +1,395 @@
+{% extends "layout.html" %}
+
+{% block styles %}
+  .storage-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;
+  }
+  .info-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .info-item {
+    background: var(--bg-row); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .info-key { font-size: 10px; color: var(--gray); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+  .info-val { font-size: 13px; color: var(--white); font-family: var(--mono); word-break: break-all; }
+  .info-val.muted { color: var(--gray); font-style: italic; }
+  .status-banner {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px; border-radius: 8px; margin-bottom: 20px;
+    font-size: 13px; font-weight: 500;
+    border: 1px solid;
+  }
+  .status-banner.ok   { background: rgba(34,197,94,.08);  border-color: rgba(34,197,94,.25);  color: #4ade80; }
+  .status-banner.down { background: var(--red-dim);        border-color: rgba(220,38,38,.3);   color: var(--red-light); }
+  .action-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn-danger {
+    background: var(--red-dim); color: var(--red-light);
+    border: 1px solid rgba(220,38,38,.35); border-radius: 6px;
+    padding: 6px 14px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all .15s;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .btn-danger:hover { background: rgba(220,38,38,.18); border-color: var(--red); }
+  .action-hint { font-size: 11px; color: var(--gray); margin-top: 10px; line-height: 1.6; }
+
+  /* ── CLEAR MODAL ── */
+  .confirm-input {
+    width: 100%; background: var(--bg-row); border: 1px solid var(--border-dim);
+    border-radius: 6px; color: var(--white); font-size: 14px; padding: 8px 12px;
+    outline: none; font-family: var(--mono); transition: border-color .2s; margin-top: 8px;
+  }
+  .confirm-input:focus { border-color: var(--red); }
+  .confirm-input.valid { border-color: var(--green); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+  @media (max-width: 900px) {
+    .storage-grid { grid-template-columns: repeat(2, 1fr); }
+    .info-grid    { grid-template-columns: repeat(2, 1fr); }
+  }
+{% endblock %}
+
+{% block header_right %}
+<button class="btn btn-ghost" onclick="loadOverview()" id="refreshBtn" style="padding:5px 12px">
+  <i class="fas fa-rotate-right"></i> Refresh
+</button>
+{% endblock %}
+
+{% block content %}
+
+  <!-- STATUS BANNER -->
+  <div class="status-banner down" id="statusBanner" style="display:none">
+    <i class="fas fa-circle-xmark"></i>
+    <span id="statusText">Checking storage…</span>
+  </div>
+
+  <!-- STATS CARDS -->
+  <div class="storage-grid" id="statsCards">
+    <!-- populated by JS -->
+    <div class="stat-card"><span class="stat-label">Status</span><span class="stat-value"><span class="skel" style="width:80px"></span></span></div>
+    <div class="stat-card"><span class="stat-label">Entries</span><span class="stat-value"><span class="skel" style="width:60px"></span></span></div>
+    <div class="stat-card"><span class="stat-label">Backend</span><span class="stat-value"><span class="skel" style="width:70px"></span></span></div>
+    <div class="stat-card"><span class="stat-label">Retention</span><span class="stat-value"><span class="skel" style="width:50px"></span></span></div>
+  </div>
+
+  <!-- DETAILS PANEL -->
+  <div class="table-wrapper" style="margin-bottom:16px">
+    <div class="table-header">
+      <span class="table-title">
+        <i class="fas fa-circle-info" style="color:var(--red)"></i>
+        Storage Details
+      </span>
+      <span class="table-count" id="backendBadge">—</span>
+    </div>
+    <div style="padding:20px">
+      <div class="info-grid" id="infoGrid">
+        <div class="info-item"><div class="info-key">Loading</div><div class="info-val muted">—</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ACTIONS PANEL -->
+  <div class="table-wrapper">
+    <div class="table-header">
+      <span class="table-title">
+        <i class="fas fa-wrench" style="color:var(--red)"></i>
+        Maintenance
+      </span>
+    </div>
+    <div style="padding:20px">
+      <div class="action-row">
+        <button class="btn btn-ghost" id="trimBtn" onclick="doTrim()">
+          <i class="fas fa-scissors"></i> Trim Now
+        </button>
+        <button class="btn-danger" id="clearBtn" onclick="openClearModal()">
+          <i class="fas fa-trash-can"></i> Clear All Logs
+        </button>
+      </div>
+      <p class="action-hint">
+        <strong style="color:var(--gray-light)">Trim Now</strong> — applies the configured retention policies immediately
+        (time-based &amp; count-based). Useful after manually importing a large batch or during an incident.<br>
+        <strong style="color:var(--red-light)">Clear All Logs</strong> — permanently deletes every stored entry.
+        This action cannot be undone.
+      </p>
+    </div>
+  </div>
+
+{% endblock %}
+
+{% block scripts %}
+
+<!-- ── CLEAR CONFIRMATION MODAL ───────────────────────────────────────────── -->
+<div class="modal-overlay" id="clearOverlay">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head">
+      <span class="modal-event" style="color:var(--red-light)">
+        <i class="fas fa-triangle-exclamation" style="margin-right:6px"></i>
+        Clear All Logs
+      </span>
+      <button class="modal-close" onclick="closeClearModal()"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div class="modal-body" style="gap:12px">
+      <p style="font-size:13px;color:var(--gray-light);line-height:1.6">
+        This will permanently delete <strong style="color:var(--white)">all</strong> stored log entries
+        from the storage backend. This action <strong style="color:var(--red-light)">cannot be undone</strong>.
+      </p>
+      <p style="font-size:12px;color:var(--gray)">
+        Type <code style="background:#1a1a1a;padding:2px 6px;border-radius:4px;color:var(--red-light);font-family:var(--mono)">DELETE</code> to confirm:
+      </p>
+      <input
+        class="confirm-input"
+        id="confirmInput"
+        type="text"
+        placeholder="Type DELETE here"
+        oninput="onConfirmInput(this)"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeClearModal()">Cancel</button>
+        <button class="btn-danger" id="confirmClearBtn" disabled
+          style="opacity:.4;cursor:not-allowed"
+          onclick="doConfirmClear()">
+          <i class="fas fa-trash-can"></i> Delete Everything
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = "{{ api_base }}";
+
+  // ── LOAD ────────────────────────────────────────────────────────────────
+  async function loadOverview() {
+    const btn = document.getElementById('refreshBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+      const res  = await fetch(`${API_BASE}/storage/overview`);
+      const data = await res.json();
+      render(data);
+    } catch (e) {
+      showBanner(false, 'Failed to reach storage API');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate-right"></i> Refresh'; }
+    }
+  }
+
+  // ── RENDER ───────────────────────────────────────────────────────────────
+  function render(d) {
+    const isRedis  = d.backend === 'redis';
+    const overlay  = document.getElementById('clearOverlay');
+
+    // Status banner
+    if (!d.connected) {
+      showBanner(false, d.error || 'Storage unreachable');
+    } else {
+      hideBanner();
+    }
+
+    // Backend badge
+    const bb = document.getElementById('backendBadge');
+    if (bb) bb.textContent = d.backend.toUpperCase();
+
+    // Stats cards
+    const retentionLabel = d.retention_hours >= 168
+      ? Math.round(d.retention_hours / 24) + 'd'
+      : d.retention_hours + 'h';
+
+    let cards = '';
+
+    // Card 1: Status
+    const statusColor = d.connected ? 'var(--green)' : 'var(--red-light)';
+    const statusIcon  = d.connected ? 'fa-circle-check' : 'fa-circle-xmark';
+    const statusText  = d.connected ? 'Connected' : 'Error';
+    cards += `<div class="stat-card ${d.connected ? 'green' : 'red'}">
+      <span class="stat-label">Status</span>
+      <span class="stat-value" style="font-size:20px;color:${statusColor}">
+        <i class="fas ${statusIcon}" style="font-size:18px;margin-right:6px"></i>${statusText}
+      </span>
+      <span class="stat-sub">${d.backend}</span>
+    </div>`;
+
+    // Card 2: Entries / Rows
+    const entryCount  = isRedis ? (d.stream_length ?? 0) : (d.row_count ?? 0);
+    const entryLabel  = isRedis ? 'Stream Entries' : 'Total Rows';
+    const entryClass  = entryCount > d.max_entries * 0.9 ? 'red' : entryCount > d.max_entries * 0.7 ? 'amber' : '';
+    cards += `<div class="stat-card ${entryClass}">
+      <span class="stat-label">${entryLabel}</span>
+      <span class="stat-value ${entryClass}">${entryCount.toLocaleString()}</span>
+      <span class="stat-sub">max ${d.max_entries.toLocaleString()}</span>
+    </div>`;
+
+    // Card 3: Redis → Queue | SQLite → File Size
+    if (isRedis) {
+      const q       = d.queue_size ?? 0;
+      const qClass  = q > 100 ? 'red' : q > 20 ? 'amber' : '';
+      cards += `<div class="stat-card ${qClass}">
+        <span class="stat-label">Queue Buffer</span>
+        <span class="stat-value ${qClass}">${q.toLocaleString()}</span>
+        <span class="stat-sub">pending flush</span>
+      </div>`;
+    } else {
+      const sz      = d.file_size_bytes ?? 0;
+      const szLabel = fmtBytes(sz);
+      cards += `<div class="stat-card">
+        <span class="stat-label">File Size</span>
+        <span class="stat-value" style="font-size:22px">${szLabel}</span>
+        <span class="stat-sub">${d.db_path ? shortPath(d.db_path) : '—'}</span>
+      </div>`;
+    }
+
+    // Card 4: Redis → Memory | SQLite → WAL
+    if (isRedis) {
+      const mem     = d.memory_bytes != null ? fmtBytes(d.memory_bytes) : '—';
+      cards += `<div class="stat-card">
+        <span class="stat-label">Stream Memory</span>
+        <span class="stat-value" style="font-size:22px">${mem}</span>
+        <span class="stat-sub">approx. stream key</span>
+      </div>`;
+    } else {
+      const walOk   = d.wal_active;
+      const walCol  = walOk ? 'var(--green)' : 'var(--amber)';
+      const walTxt  = walOk == null ? '—' : (walOk ? 'Active' : 'Inactive');
+      cards += `<div class="stat-card ${walOk ? 'green' : 'amber'}">
+        <span class="stat-label">WAL Mode</span>
+        <span class="stat-value" style="font-size:20px;color:${walCol}">${walTxt}</span>
+        <span class="stat-sub">journal_mode</span>
+      </div>`;
+    }
+
+    document.getElementById('statsCards').innerHTML = cards;
+
+    // Info grid
+    let items = '';
+    if (isRedis) {
+      items += infoItem('Stream Key',    d.stream_key    || '—');
+      items += infoItem('Queue Key',     d.queue_key     || '—');
+      items += infoItem('Last Entry',    d.last_entry_ts ? formatRelativeDate(d.last_entry_ts) : '—');
+      items += infoItem('Max Entries',   d.max_entries.toLocaleString());
+      items += infoItem('Retention',     retentionLabel);
+      items += infoItem('Stream Length', (d.stream_length ?? 0).toLocaleString() + ' entries');
+    } else {
+      items += infoItem('File Path',     d.db_path || '—');
+      items += infoItem('File Size',     fmtBytes(d.file_size_bytes ?? 0));
+      items += infoItem('Row Count',     (d.row_count ?? 0).toLocaleString() + ' rows');
+      items += infoItem('WAL Mode',      d.wal_active == null ? '—' : (d.wal_active ? 'WAL' : 'DELETE'));
+      items += infoItem('Max Entries',   d.max_entries.toLocaleString());
+      items += infoItem('Retention',     retentionLabel);
+    }
+    document.getElementById('infoGrid').innerHTML = items;
+  }
+
+  // ── TRIM ────────────────────────────────────────────────────────────────
+  async function doTrim() {
+    const btn = document.getElementById('trimBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Trimming…'; }
+    try {
+      const res  = await fetch(`${API_BASE}/storage/trim`, { method: 'POST' });
+      const data = await res.json();
+      showToast(data.ok ? data.detail : ('Trim failed: ' + data.detail),
+                data.ok ? 'fa-scissors' : 'fa-triangle-exclamation');
+      if (data.ok) loadOverview();
+    } catch {
+      showToast('Trim request failed', 'fa-triangle-exclamation');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-scissors"></i> Trim Now'; }
+    }
+  }
+
+  // ── CLEAR MODAL ─────────────────────────────────────────────────────────
+  function openClearModal() {
+    const inp = document.getElementById('confirmInput');
+    if (inp) inp.value = '';
+    const btn = document.getElementById('confirmClearBtn');
+    if (btn) { btn.disabled = true; btn.style.opacity = '.4'; btn.style.cursor = 'not-allowed'; }
+    document.getElementById('clearOverlay').classList.add('open');
+    setTimeout(() => { if (inp) inp.focus(); }, 180);
+  }
+
+  function closeClearModal() {
+    document.getElementById('clearOverlay').classList.remove('open');
+  }
+
+  function onConfirmInput(el) {
+    const btn    = document.getElementById('confirmClearBtn');
+    const valid  = el.value.trim() === 'DELETE';
+    el.classList.toggle('valid', valid);
+    if (btn) {
+      btn.disabled         = !valid;
+      btn.style.opacity    = valid ? '1' : '.4';
+      btn.style.cursor     = valid ? 'pointer' : 'not-allowed';
+    }
+  }
+
+  async function doConfirmClear() {
+    const btn = document.getElementById('confirmClearBtn');
+    if (btn && btn.disabled) return;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+      const res  = await fetch(`${API_BASE}/storage/clear`, { method: 'POST' });
+      const data = await res.json();
+      closeClearModal();
+      showToast(data.ok ? data.detail : ('Clear failed: ' + data.detail),
+                data.ok ? 'fa-trash-can' : 'fa-triangle-exclamation');
+      if (data.ok) loadOverview();
+    } catch {
+      showToast('Clear request failed', 'fa-triangle-exclamation');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-can"></i> Delete Everything'; }
+    }
+  }
+
+  // ── HELPERS ─────────────────────────────────────────────────────────────
+  function showBanner(ok, msg) {
+    const el = document.getElementById('statusBanner');
+    const tx = document.getElementById('statusText');
+    if (!el) return;
+    el.style.display = 'flex';
+    el.className = 'status-banner ' + (ok ? 'ok' : 'down');
+    el.querySelector('i').className = 'fas ' + (ok ? 'fa-circle-check' : 'fa-circle-xmark');
+    if (tx) tx.textContent = msg;
+  }
+  function hideBanner() {
+    const el = document.getElementById('statusBanner');
+    if (el) el.style.display = 'none';
+  }
+
+  function infoItem(key, val) {
+    const plain = typeof val === 'string' && val !== '—';
+    return `<div class="info-item">
+      <div class="info-key">${esc(key)}</div>
+      <div class="info-val ${val === '—' ? 'muted' : ''}">${val}</div>
+    </div>`;
+  }
+
+  function fmtBytes(b) {
+    if (b == null) return '—';
+    if (b < 1024)        return b + ' B';
+    if (b < 1048576)     return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824)  return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function shortPath(p) {
+    if (!p) return '—';
+    const parts = p.replace(/\\/g, '/').split('/');
+    return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : p;
+  }
+
+  function esc(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Close clear modal on overlay click
+  document.getElementById('clearOverlay').addEventListener('click', function(e) {
+    if (e.target === this) closeClearModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeClearModal();
+  });
+
+  // ── BOOT ────────────────────────────────────────────────────────────────
+  loadOverview();
+  setInterval(loadOverview, 30000);
+</script>
+{% endblock %}
