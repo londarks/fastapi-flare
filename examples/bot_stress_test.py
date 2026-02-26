@@ -31,7 +31,7 @@ from typing import Callable
 
 import httpx
 
-BASE = "http://localhost:8001"
+BASE = "http://localhost:8002"
 METRICS_URL = f"{BASE}/flare/api/metrics"
 
 # ── ANSI colors ──────────────────────────────────────────────────────────────

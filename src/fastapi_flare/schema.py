@@ -50,6 +50,7 @@ class FlareEndpointMetric(BaseModel):
     count: int
     errors: int
     avg_latency_ms: int
+    p95_latency_ms: int = 0
     max_latency_ms: int
     error_rate: float
 

@@ -16,8 +16,8 @@ Design goals
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -26,6 +26,9 @@ class _EndpointStats:
     errors: int = 0
     total_ms: int = 0
     max_ms: int = 0
+    # Bounded ring buffer: last 1 000 samples are enough for stable P95.
+    # At 500 endpoints × 1 000 samples × 4 bytes ≈ 2 MB max.
+    _samples: deque = field(default_factory=lambda: deque(maxlen=1000))
 
     def record(self, duration_ms: int, status_code: int) -> None:
         self.count += 1
@@ -34,10 +37,20 @@ class _EndpointStats:
             self.max_ms = duration_ms
         if status_code >= 400:
             self.errors += 1
+        self._samples.append(duration_ms)
 
     @property
     def avg_ms(self) -> int:
         return self.total_ms // self.count if self.count else 0
+
+    @property
+    def p95_ms(self) -> int:
+        """95th-percentile latency over the last 1 000 samples."""
+        if not self._samples:
+            return 0
+        sorted_s = sorted(self._samples)
+        idx = max(0, int(len(sorted_s) * 0.95) - 1)
+        return sorted_s[idx]
 
     @property
     def error_rate(self) -> float:
@@ -97,6 +110,7 @@ class FlareMetrics:
                 "count": s.count,
                 "errors": s.errors,
                 "avg_latency_ms": s.avg_ms,
+                "p95_latency_ms": s.p95_ms,
                 "max_latency_ms": s.max_ms,
                 "error_rate": s.error_rate,
             }
