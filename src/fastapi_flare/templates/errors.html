@@ -45,26 +45,17 @@
     </div>
     <div class="filter-group">
       <span class="filter-label">Level</span>
-      <select id="levelFilter" onchange="loadLogs(1)">
-        <option value="">All</option>
-        <option value="ERROR">ERROR</option>
-        <option value="WARNING">WARNING</option>
-      </select>
+      <div class="level-chips">
+        <button class="chip active" data-level="" onclick="setLevelChip(this)">All</button>
+        <button class="chip" data-level="ERROR" onclick="setLevelChip(this)">Error</button>
+        <button class="chip" data-level="WARNING" onclick="setLevelChip(this)">Warning</button>
+      </div>
     </div>
     <div class="filter-group">
       <span class="filter-label">Event</span>
       <input type="text" id="eventFilter" placeholder="e.g. http_exception" style="width:180px" oninput="debounceLoad()" />
     </div>
     <div class="filters-right">
-      <div class="filter-group">
-        <span class="filter-label">Per page</span>
-        <select id="limitSelect" onchange="changeLimit()">
-          <option value="10">10</option>
-          <option value="25" selected>25</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
-      </div>
       <button class="btn btn-ghost" onclick="clearFilters()"><i class="fas fa-xmark"></i> Clear</button>
       <button class="btn btn-red" onclick="loadLogs(1)"><i class="fas fa-rotate-right"></i> Refresh</button>
     </div>
@@ -127,9 +118,12 @@
   // ── State ─────────────────────────────────────────────────────────────────
   let currentPage      = 1;
   let totalPages       = 1;
-  let currentLimit     = 25;
+  let currentLimit     = 15;
   let autoRefreshTimer = null;
   let debounceTimer    = null;
+  let activeLevel      = '';
+  let lastKnownTotal   = null;
+  let activeRow        = null;
 
   // ── Boot ──────────────────────────────────────────────────────────────────
   loadLogs(1);
@@ -140,9 +134,9 @@
     try {
       const res  = await fetch(`${API_BASE}/stats`);
       const data = await res.json();
-      document.getElementById('statErrors').textContent   = data.errors_last_24h ?? '—';
-      document.getElementById('statWarnings').textContent = data.warnings_last_24h ?? '—';
-      document.getElementById('statTotal').textContent    = (data.total_entries ?? 0).toLocaleString();
+      setStatFlash('statErrors',   data.errors_last_24h   ?? '—');
+      setStatFlash('statWarnings', data.warnings_last_24h ?? '—');
+      setStatFlash('statTotal',    (data.total_entries ?? 0).toLocaleString());
       if (data.newest_entry_ts) {
         const d = new Date(data.newest_entry_ts);
         document.getElementById('statLastError').textContent    = d.toLocaleTimeString();
@@ -155,8 +149,10 @@
   async function loadLogs(page = 1) {
     currentPage = page;
     showLoading();
+    const wrapper = document.querySelector('.table-wrapper');
+    if (wrapper) wrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     const params = new URLSearchParams({ page, limit: currentLimit });
-    const level  = document.getElementById('levelFilter').value;
+    const level  = activeLevel;
     const search = document.getElementById('searchInput').value;
     const event  = document.getElementById('eventFilter').value;
     if (level)  params.set('level',  level);
@@ -171,9 +167,15 @@
 
   // ── RENDER TABLE ───────────────────────────────────────────────────────────
   function renderTable(data) {
-    const tbody = document.getElementById('logsTableBody');
-    totalPages  = data.pages;
-    document.getElementById('tableCount').textContent = `${(data.total ?? 0).toLocaleString()} entries`;
+    const tbody    = document.getElementById('logsTableBody');
+    totalPages     = data.pages;
+    const newTotal = data.total ?? 0;
+    document.getElementById('tableCount').textContent = `${newTotal.toLocaleString()} entries`;
+    if (lastKnownTotal !== null && currentPage === 1 && newTotal > lastKnownTotal) {
+      const diff = newTotal - lastKnownTotal;
+      showToast(`${diff} new entr${diff === 1 ? 'y' : 'ies'} detected`, 'fa-bell');
+    }
+    lastKnownTotal = newTotal;
     if (!data.logs || !data.logs.length) {
       tbody.innerHTML = `<tr><td colspan="7">
         <div class="empty-state">
@@ -185,7 +187,7 @@
     }
     tbody.innerHTML = data.logs.map(l => `
       <tr class="level-${(l.level||'').toLowerCase()}" data-id="${esc(l.id)}" data-log="${escJson(l)}" onclick="openModalFromRow(this)">
-        <td class="td-time">${formatDate(l.timestamp)}</td>
+        <td class="td-time">${formatRelativeDate(l.timestamp)}</td>
         <td>${levelBadge(l.level)}</td>
         <td><span class="badge-event">${esc(l.event || '—')}</span></td>
         <td class="td-message"><div class="td-message-text" title="${esc(l.message||'')}">${esc(l.message || '—')}</div></td>
@@ -230,6 +232,9 @@
   function openModalFromRow(row) {
     let log;
     try { log = JSON.parse(row.getAttribute('data-log')); } catch (e) { return; }
+    if (activeRow) activeRow.classList.remove('row-active');
+    activeRow = row;
+    activeRow.classList.add('row-active');
     openModal(log);
   }
   function openModal(log) {
@@ -251,12 +256,12 @@
       ${log.stack_trace ? `
       <div class="detail-section">
         <div class="detail-section-title"><i class="fas fa-layer-group"></i> Stack Trace</div>
-        <pre class="code-block stack">${esc(log.stack_trace)}</pre>
+        ${codeBlock(esc(log.stack_trace), 'stack')}
       </div>` : ''}
       ${log.request_body != null ? `
       <div class="detail-section">
         <div class="detail-section-title"><i class="fas fa-arrow-up-from-bracket"></i> Request Body</div>
-        <pre class="code-block">${esc(typeof log.request_body === 'object' ? JSON.stringify(log.request_body, null, 2) : String(log.request_body))}</pre>
+        ${codeBlock(esc(typeof log.request_body === 'object' ? JSON.stringify(log.request_body, null, 2) : String(log.request_body)))}
       </div>` : ''}
       <div class="detail-section">
         <div class="detail-section-title"><i class="fas fa-info-circle"></i> Request Info</div>
@@ -272,14 +277,18 @@
       ${log.context ? `
       <div class="detail-section">
         <div class="detail-section-title"><i class="fas fa-brackets-curly"></i> Context</div>
-        <pre class="code-block">${esc(JSON.stringify(log.context, null, 2))}</pre>
+        ${codeBlock(esc(JSON.stringify(log.context, null, 2)))}
       </div>` : ''}
     `;
     document.getElementById('modalOverlay').classList.add('open');
     document.body.style.overflow = 'hidden';
   }
   function closeModal(e) { if (e.target === document.getElementById('modalOverlay')) closeModalBtn(); }
-  function closeModalBtn() { document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
+  function closeModalBtn() {
+    document.getElementById('modalOverlay').classList.remove('open');
+    document.body.style.overflow = '';
+    if (activeRow) { activeRow.classList.remove('row-active'); activeRow = null; }
+  }
 
   // ── AUTO REFRESH ───────────────────────────────────────────────────────────
   function toggleAutoRefresh(on) {
@@ -298,16 +307,33 @@
 
   // ── HELPERS ────────────────────────────────────────────────────────────────
   function debounceLoad() { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => loadLogs(1), 400); }
-  function changeLimit() { currentLimit = parseInt(document.getElementById('limitSelect').value, 10); loadLogs(1); }
   function clearFilters() {
     document.getElementById('searchInput').value = '';
-    document.getElementById('levelFilter').value = '';
     document.getElementById('eventFilter').value = '';
+    activeLevel = '';
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    const allChip = document.querySelector('.chip[data-level=""]');
+    if (allChip) allChip.classList.add('active');
+    loadLogs(1);
+  }
+  function setLevelChip(btn) {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    activeLevel = btn.dataset.level;
     loadLogs(1);
   }
   function showLoading() {
-    document.getElementById('logsTableBody').innerHTML =
-      `<tr class="loading-row"><td colspan="7"><span class="spinner"></span></td></tr>`;
+    const skel = (w) => `<div class="skel" style="width:${w}"></div>`;
+    const skRow = () => `<tr>
+      <td class="td-time">${skel('96px')}</td>
+      <td>${skel('52px')}</td>
+      <td>${skel('110px')}</td>
+      <td class="td-message">${skel('200px')}</td>
+      <td class="td-endpoint">${skel('130px')}</td>
+      <td>${skel('36px')}</td>
+      <td></td>
+    </tr>`;
+    document.getElementById('logsTableBody').innerHTML = Array(6).fill(0).map(skRow).join('');
   }
   function showError() {
     document.getElementById('logsTableBody').innerHTML =
@@ -344,6 +370,13 @@
   function escJson(obj) {
     return JSON.stringify(obj).replace(/'/g,"&#39;").replace(/"/g,'&quot;');
   }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModalBtn(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModalBtn();
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      const s = document.getElementById('searchInput');
+      if (s) { s.focus(); s.select(); }
+    }
+  });
 </script>
 {% endblock %}

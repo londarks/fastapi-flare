@@ -93,10 +93,11 @@
   const API_BASE = "{{ api_base }}";
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let autoRefreshTimer = null;
-  let allEndpoints     = [];
-  let currentPage      = 1;
-  const PAGE_SIZE      = 15;
+  let autoRefreshTimer    = null;
+  let allEndpoints        = [];
+  let currentPage         = 1;
+  const PAGE_SIZE         = 15;
+  let lastKnownRequests   = null;
 
   // ── Boot ──────────────────────────────────────────────────────────────────
   loadMetrics();
@@ -120,10 +121,15 @@
     const errors    = data.total_errors   ?? 0;
     const rate      = total > 0 ? (errors / total * 100).toFixed(1) : '0.0';
 
-    document.getElementById('statTotal').textContent      = total.toLocaleString();
-    document.getElementById('statErrors').textContent     = errors.toLocaleString();
-    document.getElementById('statEndpoints').textContent  = allEndpoints.length;
-    document.getElementById('statErrorRate').textContent  = rate + '%';
+    if (lastKnownRequests !== null && total > lastKnownRequests) {
+      showToast('Metrics updated', 'fa-arrow-rotate-right');
+    }
+    lastKnownRequests = total;
+
+    setStatFlash('statTotal',     total.toLocaleString());
+    setStatFlash('statErrors',    errors.toLocaleString());
+    setStatFlash('statEndpoints', String(allEndpoints.length));
+    setStatFlash('statErrorRate', rate + '%');
     document.getElementById('capacityWarning').style.display = data.at_capacity ? 'block' : 'none';
     document.getElementById('tableCount').textContent     =
       `${allEndpoints.length} endpoint${allEndpoints.length === 1 ? '' : 's'}`;
@@ -221,8 +227,16 @@
 
   // ── HELPERS ────────────────────────────────────────────────────────────────
   function showLoading() {
-    document.getElementById('metricsTableBody').innerHTML =
-      `<tr class="loading-row"><td colspan="6"><span class="spinner"></span></td></tr>`;
+    const skel  = (w) => `<div class="skel" style="width:${w}"></div>`;
+    const skRow = () => `<tr>
+      <td class="td-endpoint">${skel('170px')}</td>
+      <td class="td-num">${skel('48px')}</td>
+      <td class="td-num">${skel('38px')}</td>
+      <td class="td-num">${skel('48px')}</td>
+      <td class="td-num">${skel('68px')}</td>
+      <td class="td-num">${skel('68px')}</td>
+    </tr>`;
+    document.getElementById('metricsTableBody').innerHTML = Array(6).fill(0).map(skRow).join('');
   }
   function showError() {
     document.getElementById('metricsTableBody').innerHTML =

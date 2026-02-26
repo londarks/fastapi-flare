@@ -317,6 +317,68 @@
     .live-dot { width: 7px; height: 7px; background: var(--red); border-radius: 50%; animation: pulse 1s ease-in-out infinite; flex-shrink: 0; }
     .live-dot.off { background: var(--gray); animation: none; }
 
+    /* ── SKELETON ROWS ── */
+    .skel {
+      height: 12px; border-radius: 4px; display: inline-block;
+      background: linear-gradient(90deg, var(--bg-row) 25%, var(--bg-hover) 50%, var(--bg-row) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    /* ── TOAST ── */
+    .toast-container {
+      position: fixed; bottom: 24px; right: 24px; z-index: 500;
+      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+    }
+    .toast {
+      background: var(--bg-card); border: 1px solid var(--border-dim);
+      border-radius: 8px; padding: 10px 16px;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: var(--white);
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+      pointer-events: all;
+      transform: translateY(8px); opacity: 0;
+      transition: transform .2s, opacity .2s;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast i { color: var(--red); }
+    .toast.toast-green i { color: var(--green); }
+
+    /* ── LEVEL CHIPS ── */
+    .level-chips { display: flex; gap: 4px; }
+    .chip {
+      padding: 4px 12px; border-radius: 99px;
+      border: 1px solid var(--border-dim);
+      font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all .15s;
+      background: transparent; color: var(--gray-light);
+      white-space: nowrap;
+    }
+    .chip:hover:not(.active) { border-color: var(--gray); color: var(--white); }
+    .chip.active { background: rgba(249,249,249,.08); border-color: rgba(249,249,249,.25); color: var(--white); }
+    .chip.active[data-level="ERROR"]   { background: var(--red-dim);   border-color: rgba(220,38,38,.4);  color: var(--red-light); }
+    .chip.active[data-level="WARNING"] { background: var(--amber-dim); border-color: rgba(245,158,11,.4); color: var(--amber); }
+
+    /* ── COPY BTN (code blocks in modal) ── */
+    .code-block-wrapper { position: relative; }
+    .copy-btn {
+      position: absolute; top: 8px; right: 8px;
+      background: var(--bg-row); border: 1px solid var(--border-dim);
+      color: var(--gray); border-radius: 4px; padding: 3px 8px;
+      font-size: 11px; cursor: pointer; transition: all .15s; z-index: 1;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .copy-btn:hover { border-color: var(--gray); color: var(--white); }
+    .copy-btn.copied { border-color: var(--green); color: var(--green); }
+
+    /* ── ROW ACTIVE (modal open) ── */
+    tbody tr.row-active { background: rgba(220,38,38,.05) !important; box-shadow: inset 3px 0 0 var(--red); }
+
+    /* ── STAT FLASH (on value change) ── */
+    @keyframes flash-val { 0%{background:rgba(220,38,38,.22);border-radius:5px} 100%{background:transparent} }
+    .stat-flash { animation: flash-val .7s ease-out; }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, 1fr); }
@@ -375,7 +437,89 @@
   {% block content %}{% endblock %}
 </main>
 
+<!-- ── TOAST CONTAINER ── -->
+<div class="toast-container" id="toastContainer"></div>
+
 {% block scripts %}{% endblock %}
+
+<script>
+/* ── GLOBAL MICRO-UX UTILITIES ─────────────────────────────────────────── */
+
+/* Toast */
+function showToast(msg, iconClass) {
+  var container = document.getElementById('toastContainer');
+  if (!container) return;
+  var t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = '<i class="fas ' + (iconClass || 'fa-bell') + '"></i> ' + msg;
+  container.appendChild(t);
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() { t.classList.add('show'); });
+  });
+  setTimeout(function() {
+    t.classList.remove('show');
+    setTimeout(function() { t.remove(); }, 260);
+  }, 3500);
+}
+
+/* Clipboard */
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(function() {
+    btn.classList.add('copied');
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+    setTimeout(function() {
+      btn.classList.remove('copied');
+      btn.innerHTML = '<i class="fas fa-copy"></i>';
+    }, 2000);
+  });
+}
+
+/* Code block with copy button */
+function codeBlock(text, extraClass) {
+  var id = 'cb_' + Math.random().toString(36).slice(2);
+  var cls = extraClass ? ' ' + extraClass : '';
+  return '<div class="code-block-wrapper">'
+    + '<button class="copy-btn" onclick="copyCode(this,\'' + id + '\')" title="Copy to clipboard">'
+    + '<i class="fas fa-copy"></i>'
+    + '</button>'
+    + '<pre class="code-block' + cls + '" id="' + id + '">' + text + '</pre>'
+    + '</div>';
+}
+
+function copyCode(btn, id) {
+  var pre = document.getElementById(id);
+  if (!pre) return;
+  copyToClipboard(pre.textContent, btn);
+}
+
+/* Stat value with flash animation */
+function setStatFlash(id, value) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var v = String(value);
+  if (el.textContent !== '—' && el.textContent !== v) {
+    el.classList.remove('stat-flash');
+    void el.offsetWidth;
+    el.classList.add('stat-flash');
+  }
+  el.textContent = v;
+}
+
+/* Relative timestamp */
+function formatRelativeDate(iso) {
+  if (!iso) return '—';
+  var d   = new Date(iso);
+  var abs = d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+  var sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  var rel;
+  if (sec < 5)          rel = 'just now';
+  else if (sec < 60)    rel = sec + 's ago';
+  else if (sec < 3600)  rel = Math.floor(sec / 60) + 'm ago';
+  else if (sec < 86400) rel = Math.floor(sec / 3600) + 'h ago';
+  else                  rel = d.toLocaleDateString();
+  return '<span title="' + abs + '" style="cursor:default">' + rel + '</span>';
+}
+</script>
 
 <script>
 (function () {
