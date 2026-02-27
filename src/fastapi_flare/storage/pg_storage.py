@@ -77,6 +77,16 @@ CREATE INDEX IF NOT EXISTS idx_{table}_level_ts   ON {table} (level, timestamp D
 """
 
 
+def _build_settings_ddl(table: str) -> str:
+    """Generate CREATE TABLE DDL for the key-value settings store."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '{{}}'
+);
+"""
+
+
 def _build_requests_ddl(table: str) -> str:
     """Generate CREATE TABLE + indexes DDL for the HTTP requests ring-buffer table."""
     return f"""
@@ -137,6 +147,12 @@ class PostgreSQLStorage:
         base = self._table
         return base.replace("_logs", "_requests") if "_logs" in base else base + "_requests"
 
+    @property
+    def _settings_table(self) -> str:
+        """Derived settings table name, e.g. ``flare_logs`` → ``flare_settings``."""
+        base = self._table
+        return base.replace("_logs", "_settings") if "_logs" in base else base + "_settings"
+
     # ── Lazy pool init ────────────────────────────────────────────────────────
 
     async def _ensure_pool(self) -> Any:
@@ -162,6 +178,7 @@ class PostgreSQLStorage:
         async with self._pool.acquire() as conn:
             await conn.execute(_build_ddl(self._table))
             await conn.execute(_build_requests_ddl(self._requests_table))
+            await conn.execute(_build_settings_ddl(self._settings_table))
 
         return self._pool
 
@@ -502,7 +519,35 @@ class PostgreSQLStorage:
             )
         except Exception:
             return _empty_request_stats(self._config.request_max_entries)
+    # ── Settings ──────────────────────────────────────────────────────────────
 
+    async def get_settings(self, key: str) -> dict:
+        """Return the stored settings dict for *key*, or {} if not found."""
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT value FROM {self._settings_table} WHERE key = $1", key
+                )
+            if row:
+                return json.loads(row["value"])
+        except Exception:
+            pass
+        return {}
+
+    async def save_settings(self, key: str, value: dict) -> None:
+        """Upsert *value* JSON under *key* in the settings table."""
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"INSERT INTO {self._settings_table} (key, value) VALUES ($1, $2)"
+                    f" ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+                    key,
+                    json.dumps(value, default=str),
+                )
+        except Exception:
+            pass
     # ── Read path ─────────────────────────────────────────────────────────────
 
     async def list_logs(

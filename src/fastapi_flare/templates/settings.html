@@ -44,19 +44,6 @@
         <span class="sp-nav-dot" id="dot-discord"></span>
       </button>
 
-      <button class="sp-nav-item" data-panel="teams" onclick="switchPanel(this,'teams')">
-        <span class="sp-nav-icon teams-icon">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
-            <path d="M20.625 8.578a3.117 3.117 0 0 0-3.117-3.117 3.116 3.116 0 0 0-2.191.904A5.06 5.06 0 0 0 12.533 3H7.78A5.066 5.066 0 0 0 2.719 8.063v4.562a5.064 5.064 0 0 0 3.5 4.813v1.406a.844.844 0 0 0 1.687 0V17.5a5.062 5.062 0 0 0 3.578-3.547h.844a3.124 3.124 0 0 0 3.125-3.125V9.219a3.117 3.117 0 0 0 5.172-2.64zM11.344 12.25a3.377 3.377 0 0 1-3.375 3.375 3.377 3.377 0 0 1-3.375-3.375V8.063a3.377 3.377 0 0 1 3.375-3.375 3.377 3.377 0 0 1 3.375 3.375v4.187zm3.125-1.422a1.437 1.437 0 0 1-1.437 1.437h-.578V8.063c0-.22-.016-.437-.047-.656a1.43 1.43 0 0 1 2.062 1.297v2.124zm3.718-1.297a1.437 1.437 0 0 1-2.031-1.312V8.063c0-.793.643-1.437 1.437-1.437.793 0 1.437.643 1.437 1.437a1.44 1.44 0 0 1-.843 1.468z"/>
-          </svg>
-        </span>
-        <span class="sp-nav-info">
-          <span class="sp-nav-name">Microsoft Teams</span>
-          <span class="sp-nav-sub">Adaptive Card</span>
-        </span>
-        <span class="sp-nav-dot" id="dot-teams"></span>
-      </button>
-
       <button class="sp-nav-item" data-panel="webhook" onclick="switchPanel(this,'webhook')">
         <span class="sp-nav-icon webhook-icon">
           <i class="fas fa-plug" style="font-size:14px"></i>
@@ -137,7 +124,7 @@
 
           <div class="sp-actions">
             <button class="sp-btn-ghost" onclick="testChannel('slack')"><i class="fas fa-paper-plane"></i> Send test</button>
-            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+            <button class="sp-btn-primary" disabled onclick="saveChannel('slack')"><i class="fas fa-floppy-disk"></i> Save</button>
           </div>
         </div>
       </div>
@@ -179,46 +166,11 @@
           </div>
           <div class="sp-actions">
             <button class="sp-btn-ghost" onclick="testChannel('discord')"><i class="fas fa-paper-plane"></i> Send test</button>
-            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+            <button class="sp-btn-primary" disabled onclick="saveChannel('discord')"><i class="fas fa-floppy-disk"></i> Save</button>
           </div>
         </div>
       </div>
 
-      <!-- ─── TEAMS ─── -->
-      <div class="sp-panel" id="panel-teams">
-        <div class="sp-panel-header">
-          <div class="sp-panel-icon teams-icon">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
-              <path d="M20.625 8.578a3.117 3.117 0 0 0-3.117-3.117 3.116 3.116 0 0 0-2.191.904A5.06 5.06 0 0 0 12.533 3H7.78A5.066 5.066 0 0 0 2.719 8.063v4.562a5.064 5.064 0 0 0 3.5 4.813v1.406a.844.844 0 0 0 1.687 0V17.5a5.062 5.062 0 0 0 3.578-3.547h.844a3.124 3.124 0 0 0 3.125-3.125V9.219a3.117 3.117 0 0 0 5.172-2.64zM11.344 12.25a3.377 3.377 0 0 1-3.375 3.375 3.377 3.377 0 0 1-3.375-3.375V8.063a3.377 3.377 0 0 1 3.375-3.375 3.377 3.377 0 0 1 3.375 3.375v4.187zm3.125-1.422a1.437 1.437 0 0 1-1.437 1.437h-.578V8.063c0-.22-.016-.437-.047-.656a1.43 1.43 0 0 1 2.062 1.297v2.124zm3.718-1.297a1.437 1.437 0 0 1-2.031-1.312V8.063c0-.793.643-1.437 1.437-1.437.793 0 1.437.643 1.437 1.437a1.44 1.44 0 0 1-.843 1.468z"/>
-            </svg>
-          </div>
-          <div>
-            <h2 class="sp-panel-title">Microsoft Teams</h2>
-            <p class="sp-panel-desc">Send Adaptive Card alerts to a Teams channel via Incoming Webhooks.</p>
-          </div>
-          <div class="sp-panel-header-right">
-            <span class="badge-soon">Pending integration</span>
-            <label class="sp-toggle"><input type="checkbox" id="teamsEnabled" onchange="updateDot('teams',this.checked)"><span class="sp-toggle-track"><span class="sp-toggle-thumb"></span></span></label>
-          </div>
-        </div>
-        <div class="sp-panel-body">
-          <div class="sp-field">
-            <label class="sp-label" for="teamsWebhookUrl">
-              Incoming Webhook URL
-              <a href="https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook" target="_blank" rel="noopener" class="sp-link"><i class="fas fa-arrow-up-right-from-square"></i> Docs</a>
-            </label>
-            <div class="sp-input-wrap icon">
-              <i class="fas fa-link sp-input-icon"></i>
-              <input type="url" id="teamsWebhookUrl" class="sp-input" placeholder="https://xxx.webhook.office.com/webhookb2/..." spellcheck="false" autocomplete="off"/>
-            </div>
-            <span class="sp-hint">Env: <code>FLARE_TEAMS_WEBHOOK_URL</code></span>
-          </div>
-          <div class="sp-actions">
-            <button class="sp-btn-ghost" onclick="testChannel('teams')"><i class="fas fa-paper-plane"></i> Send test</button>
-            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
-          </div>
-        </div>
-      </div>
 
       <!-- ─── GENERIC WEBHOOK ─── -->
       <div class="sp-panel" id="panel-webhook">
@@ -255,7 +207,7 @@
           </div>
           <div class="sp-actions">
             <button class="sp-btn-ghost" onclick="testChannel('webhook')"><i class="fas fa-paper-plane"></i> Send test</button>
-            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+            <button class="sp-btn-primary" disabled onclick="saveChannel('webhook')"><i class="fas fa-floppy-disk"></i> Save</button>
           </div>
         </div>
       </div>
@@ -303,7 +255,7 @@
             <label class="sp-check"><input type="checkbox"/><span class="sp-check-box"></span>Send alerts for health-check endpoints</label>
           </div>
           <div class="sp-actions">
-            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save preferences</button>
+            <button class="sp-btn-primary" onclick="saveChannel('prefs')"><i class="fas fa-floppy-disk"></i> Save preferences</button>
           </div>
         </div>
       </div>
@@ -314,6 +266,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script>window.__FLARE_API_BASE__ = '{{ api_base }}';</script>
 <style>
 /* ════════════════════════════════════════════════════════
    SETTINGS PAGE  (sp-*)
@@ -377,7 +330,6 @@
 /* Icon colours */
 .slack-icon   { background: rgba(74,21,75,.3);   color: #e01e5a; border: 1px solid rgba(224,30,90,.25); }
 .discord-icon { background: rgba(88,101,242,.12); color: #7289da; border: 1px solid rgba(114,137,218,.25); }
-.teams-icon   { background: rgba(100,148,210,.1); color: #6264a7; border: 1px solid rgba(98,100,167,.25); }
 .webhook-icon { background: rgba(34,197,94,.07);  color: var(--green); border: 1px solid rgba(34,197,94,.2); }
 .prefs-icon   { background: rgba(245,158,11,.07); color: var(--amber); border: 1px solid rgba(245,158,11,.2); }
 
@@ -562,6 +514,9 @@
 </style>
 
 <script>
+const API = window.__FLARE_API_BASE__ || '/flare/api';
+
+/* ── Panel navigation ─────────────────────────────────────────────── */
 function switchPanel(btn, id) {
   document.querySelectorAll('.sp-nav-item').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.sp-panel').forEach(p => p.classList.remove('active'));
@@ -570,23 +525,192 @@ function switchPanel(btn, id) {
 }
 
 function updateDot(channel, enabled) {
-  var dot = document.getElementById('dot-' + channel);
+  const dot = document.getElementById('dot-' + channel);
   if (dot) dot.classList.toggle('on', enabled);
 }
 
-function testChannel(type) {
-  var urlMap = {
+/* ── Load settings on mount ───────────────────────────────────────── */
+async function loadSettings() {
+  try {
+    const res = await fetch(API + '/settings');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    populateChannel('slack',   data.slack,   ['slackWebhookUrl', 'slackChannel']);
+    populateChannel('discord', data.discord, ['discordWebhookUrl']);
+    populateChannel('webhook', data.webhook, ['genericWebhookUrl', 'genericWebhookHeaders']);
+    populatePrefs(data.prefs);
+  } catch(e) {}
+}
+
+function populateChannel(ch, cfg, fieldIds) {
+  if (!cfg) return;
+  const urlFieldId = fieldIds[0];
+  const el = document.getElementById(urlFieldId);
+  if (el && cfg.url) el.value = cfg.url;
+
+  if (ch === 'slack' && cfg.channel) {
+    const c = document.getElementById('slackChannel');
+    if (c) c.value = cfg.channel;
+  }
+  if (ch === 'webhook' && cfg.headers) {
+    const h = document.getElementById('genericWebhookHeaders');
+    if (h) h.value = typeof cfg.headers === 'object' ? JSON.stringify(cfg.headers, null, 2) : cfg.headers;
+  }
+
+  const toggle = document.getElementById(ch + 'Enabled');
+  if (toggle) {
+    toggle.checked = !!cfg.enabled;
+    updateDot(ch, !!cfg.enabled);
+  }
+  // Reflect saved state in badge
+  updateBadge(ch, !!cfg.url, !!cfg.enabled);
+  // Enable save button if URL present
+  setSaveEnabled(ch, !!cfg.url);
+}
+
+function populatePrefs(prefs) {
+  if (!prefs) return;
+  const lvl = document.getElementById('alertMinLevel');
+  if (lvl && prefs.min_level) lvl.value = prefs.min_level;
+  const cd = document.getElementById('alertCooldown');
+  if (cd && prefs.cooldown_seconds !== undefined) cd.value = prefs.cooldown_seconds;
+}
+
+/* ── Badge helpers ────────────────────────────────────────────────── */
+function updateBadge(ch, hasUrl, enabled) {
+  const panel = document.getElementById('panel-' + ch);
+  if (!panel) return;
+  const badge = panel.querySelector('.badge-soon');
+  if (!badge) return;
+  if (enabled && hasUrl) {
+    badge.textContent = 'Active';
+    badge.style.background = 'rgba(34,197,94,.07)';
+    badge.style.borderColor = 'rgba(34,197,94,.25)';
+    badge.style.color = 'var(--green)';
+  } else if (hasUrl) {
+    badge.textContent = 'Saved';
+    badge.style.background = '';
+    badge.style.borderColor = '';
+    badge.style.color = '';
+  } else {
+    badge.textContent = 'Pending integration';
+    badge.style.background = '';
+    badge.style.borderColor = '';
+    badge.style.color = '';
+  }
+}
+
+/* ── Save button state ────────────────────────────────────────────── */
+function setSaveEnabled(ch, enabled) {
+  const panel = document.getElementById('panel-' + ch);
+  if (!panel) return;
+  const btn = panel.querySelector('.sp-btn-primary');
+  if (btn) btn.disabled = !enabled;
+}
+
+/* Watch URL inputs to enable Save button on the fly */
+['slackWebhookUrl','discordWebhookUrl','genericWebhookUrl'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input', () => {
+    const ch = id.replace('WebhookUrl','').replace('generic','webhook').toLowerCase();
+    setSaveEnabled(ch, !!el.value.trim());
+  });
+});
+
+/* ── Save channel ─────────────────────────────────────────────────── */
+async function saveChannel(ch) {
+  let settings = {};
+  if (ch === 'slack') {
+    settings = {
+      url:     (document.getElementById('slackWebhookUrl')?.value || '').trim(),
+      channel: (document.getElementById('slackChannel')?.value || '').trim() || null,
+      enabled: document.getElementById('slackEnabled')?.checked ?? false,
+    };
+  } else if (ch === 'discord') {
+    settings = {
+      url:     (document.getElementById('discordWebhookUrl')?.value || '').trim(),
+      enabled: document.getElementById('discordEnabled')?.checked ?? false,
+    };
+  } else if (ch === 'webhook') {
+    let headers = {};
+    try { headers = JSON.parse(document.getElementById('genericWebhookHeaders')?.value || '{}'); } catch(e) {}
+    settings = {
+      url:     (document.getElementById('genericWebhookUrl')?.value || '').trim(),
+      headers: headers,
+      enabled: document.getElementById('webhookEnabled')?.checked ?? false,
+    };
+  } else if (ch === 'prefs') {
+    settings = {
+      min_level:        document.getElementById('alertMinLevel')?.value || 'ERROR',
+      cooldown_seconds: parseInt(document.getElementById('alertCooldown')?.value || '300', 10),
+    };
+  }
+
+  try {
+    const res = await fetch(API + '/settings', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ channel: ch, settings }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('Saved!', 'fas fa-check-circle');
+      updateBadge(ch, !!settings.url, !!settings.enabled);
+    } else {
+      showToast('Error: ' + (data.detail || 'unknown'), 'fas fa-triangle-exclamation');
+    }
+  } catch(e) {
+    showToast('Network error', 'fas fa-triangle-exclamation');
+  }
+}
+
+/* ── Send test ────────────────────────────────────────────────────── */
+async function testChannel(ch) {
+  const urlMap = {
     slack:   document.getElementById('slackWebhookUrl'),
     discord: document.getElementById('discordWebhookUrl'),
-    teams:   document.getElementById('teamsWebhookUrl'),
     webhook: document.getElementById('genericWebhookUrl'),
   };
-  var el = urlMap[type];
-  if (el && !el.value.trim()) {
+  const el = urlMap[ch];
+  const url = el?.value?.trim() || '';
+
+  if (!url) {
     showToast('Enter a webhook URL first', 'fas fa-triangle-exclamation');
     return;
   }
-  showToast('Test integration not active yet — URL saved locally.', 'fas fa-check-circle');
+
+  let settings = { url };
+  if (ch === 'webhook') {
+    try { settings.headers = JSON.parse(document.getElementById('genericWebhookHeaders')?.value || '{}'); } catch(e) {}
+  }
+
+  // Disable button during request
+  const panel = document.getElementById('panel-' + ch);
+  const btn = panel?.querySelector('.sp-btn-ghost');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…'; }
+
+  try {
+    const res = await fetch(API + '/notifications/test', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ channel: ch, settings }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('Test sent successfully!', 'fas fa-check-circle');
+    } else {
+      showToast('Failed: ' + (data.detail || 'unknown'), 'fas fa-triangle-exclamation');
+    }
+  } catch(e) {
+    showToast('Network error', 'fas fa-triangle-exclamation');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send test'; }
+  }
 }
+
+/* ── Init ─────────────────────────────────────────────────────────── */
+loadSettings();
 </script>
 {% endblock %}

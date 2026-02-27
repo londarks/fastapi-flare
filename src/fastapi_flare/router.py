@@ -26,10 +26,15 @@ from starlette.responses import RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from fastapi_flare.schema import (
+    FlareAllSettings,
+    FlareChannelSettings,
     FlareEndpointMetric,
     FlareHealthReport,
     FlareLogPage,
     FlareMetricsSnapshot,
+    FlareNotificationPrefs,
+    FlareNotificationTestResult,
+    FlareSaveSettingsRequest,
     FlareRequestPage,
     FlareRequestStats,
     FlareStats,
@@ -39,6 +44,11 @@ from fastapi_flare.schema import (
 
 _TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
 _templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+
+def _load_safe(d: dict) -> dict:
+    """Return *d* if it is a non-empty dict, otherwise an empty dict."""
+    return d if isinstance(d, dict) else {}
 
 
 def make_router(config) -> APIRouter:
@@ -481,6 +491,84 @@ def make_router(config) -> APIRouter:
             retention_hours=config.retention_hours,
             **data,
         )
+
+    # ── Notification Settings ─────────────────────────────────────────────
+
+    @router.get("/api/settings", dependencies=api_deps)
+    async def get_all_settings() -> FlareAllSettings:
+        """Return all saved notification channel settings."""
+        storage = config.storage_instance
+        if storage is None:
+            return FlareAllSettings()
+
+        async def _load(key: str) -> dict:
+            return await storage.get_settings(f"notification:{key}")
+
+        return FlareAllSettings(
+            slack   = FlareChannelSettings(**(_load_safe(await _load("slack")))),
+            discord = FlareChannelSettings(**(_load_safe(await _load("discord")))),
+            webhook = FlareChannelSettings(**(_load_safe(await _load("webhook")))),
+            prefs   = FlareNotificationPrefs(**(_load_safe(await _load("prefs")))),
+        )
+
+    @router.post("/api/settings", dependencies=api_deps)
+    async def save_channel_settings(body: FlareSaveSettingsRequest) -> FlareStorageActionResult:
+        """Persist settings for one notification channel."""
+        storage = config.storage_instance
+        if storage is None:
+            return FlareStorageActionResult(ok=False, action="save_settings", detail="No storage backend configured")
+        allowed = {"slack", "discord", "webhook", "prefs"}
+        if body.channel not in allowed:
+            return FlareStorageActionResult(ok=False, action="save_settings", detail=f"Unknown channel: {body.channel}")
+        await storage.save_settings(f"notification:{body.channel}", body.settings)
+        return FlareStorageActionResult(ok=True, action="save_settings", detail=f"{body.channel} saved")
+
+    @router.post("/api/notifications/test", dependencies=api_deps)
+    async def test_notification(body: FlareSaveSettingsRequest) -> FlareNotificationTestResult:
+        """
+        Fire a test notification to the given channel using the provided (or saved) URL.
+        ``body.channel`` must be one of: slack, discord, webhook.
+        ``body.settings`` must include at least ``{"url": "https://..."}``.
+        """
+        channel = body.channel
+        url = body.settings.get("url", "").strip()
+
+        if not url:
+            return FlareNotificationTestResult(ok=False, channel=channel, detail="URL is required")
+
+        from fastapi_flare.notifiers import SlackNotifier, DiscordNotifier, WebhookNotifier
+        import httpx
+
+        _test_entry = {
+            "level": "ERROR",
+            "event": "flare.test",
+            "message": "This is a test notification from fastapi-flare.",
+            "endpoint": "/test",
+            "http_method": "GET",
+            "http_status": 500,
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        }
+
+        notifier_map = {
+            "slack":   lambda: SlackNotifier(url),
+            "discord": lambda: DiscordNotifier(url),
+            "webhook": lambda: WebhookNotifier(url, headers=body.settings.get("headers") or {}),
+        }
+
+        if channel not in notifier_map:
+            return FlareNotificationTestResult(ok=False, channel=channel, detail=f"Unknown channel: {channel}")
+
+        try:
+            notifier = notifier_map[channel]()
+            payload = notifier._build_payload(_test_entry)
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(url, json=payload, headers=notifier.headers)
+                resp.raise_for_status()
+            return FlareNotificationTestResult(ok=True, channel=channel, detail=f"HTTP {resp.status_code}")
+        except httpx.HTTPStatusError as exc:
+            return FlareNotificationTestResult(ok=False, channel=channel, detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        except Exception as exc:
+            return FlareNotificationTestResult(ok=False, channel=channel, detail=str(exc))
 
     return router
 

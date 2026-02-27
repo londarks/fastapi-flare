@@ -60,6 +60,14 @@ CREATE INDEX IF NOT EXISTS idx_logs_level_ts    ON logs(level, timestamp DESC);
 """
 
 
+_SETTINGS_DDL = """
+CREATE TABLE IF NOT EXISTS flare_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
+
 _REQUESTS_DDL = """
 CREATE TABLE IF NOT EXISTS requests (
     id              INTEGER  PRIMARY KEY AUTOINCREMENT,
@@ -125,6 +133,7 @@ class SQLiteStorage:
 
         await self._db.executescript(_DDL)
         await self._db.executescript(_REQUESTS_DDL)
+        await self._db.executescript(_SETTINGS_DDL)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.commit()
@@ -453,6 +462,35 @@ class SQLiteStorage:
                 requests_last_hour=0,
                 errors_last_hour=0,
             )
+
+    # ── Settings ───────────────────────────────────────────────────────────
+
+    async def get_settings(self, key: str) -> dict:
+        """Return the stored settings dict for *key*, or {} if not found."""
+        try:
+            db = await self._ensure_db()
+            rows = await db.execute_fetchall(
+                "SELECT value FROM flare_settings WHERE key = ?", (key,)
+            )
+            if rows:
+                return json.loads(rows[0]["value"])
+        except Exception:
+            pass
+        return {}
+
+    async def save_settings(self, key: str, value: dict) -> None:
+        """Upsert *value* JSON under *key* in flare_settings."""
+        try:
+            db = await self._ensure_db()
+            await db.execute(
+                "INSERT INTO flare_settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, json.dumps(value, default=str)),
+            )
+            await db.commit()
+        except Exception:
+            pass
+
     # ── Read path ─────────────────────────────────────────────────────────
 
     async def list_logs(

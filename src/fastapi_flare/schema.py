@@ -166,3 +166,43 @@ class FlareHealthReport(BaseModel):
     worker_flush_cycles: int
     queue_size: int
     uptime_seconds: Optional[int] = None
+
+
+class FlareChannelSettings(BaseModel):
+    """Persisted settings for one notification channel."""
+
+    enabled: bool = False
+    url: str = ""
+    channel: Optional[str] = None      # Slack only
+    headers: Optional[dict] = None     # Generic webhook only
+
+
+class FlareNotificationPrefs(BaseModel):
+    """Global alert preferences."""
+
+    min_level: str = "ERROR"
+    cooldown_seconds: int = 300
+
+
+class FlareAllSettings(BaseModel):
+    """All notification settings returned by GET /flare/api/settings."""
+
+    slack: FlareChannelSettings = FlareChannelSettings()
+    discord: FlareChannelSettings = FlareChannelSettings()
+    webhook: FlareChannelSettings = FlareChannelSettings()
+    prefs: FlareNotificationPrefs = FlareNotificationPrefs()
+
+
+class FlareSaveSettingsRequest(BaseModel):
+    """Payload for POST /flare/api/settings."""
+
+    channel: str           # "slack" | "discord" | "webhook" | "prefs"
+    settings: dict         # arbitrary key/value for that channel
+
+
+class FlareNotificationTestResult(BaseModel):
+    """Result of POST /flare/api/notifications/test."""
+
+    ok: bool
+    channel: str
+    detail: str = ""

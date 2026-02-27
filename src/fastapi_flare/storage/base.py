@@ -166,3 +166,19 @@ class FlareStorageProtocol(Protocol):
     async def get_request_stats(self) -> FlareRequestStats:
         """Return summary stats for the requests ring buffer."""
         ...
+
+    # ── Settings (notification channel config) ────────────────────────────
+
+    async def get_settings(self, key: str) -> dict:
+        """
+        Return the stored settings dict for *key*.
+        Returns an empty dict if the key does not exist.
+        """
+        ...
+
+    async def save_settings(self, key: str, value: dict) -> None:
+        """
+        Upsert *value* (JSON-serialisable dict) under *key* into the
+        settings store.  Creates the row if it does not exist.
+        """
+        ...
