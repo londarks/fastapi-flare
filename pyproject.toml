@@ -34,7 +34,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-auth   = ["python-jose[cryptography]>=3.3.0", "httpx>=0.24.0", "itsdangerous>=2.0.0"]
+auth       = ["python-jose[cryptography]>=3.3.0", "httpx>=0.24.0", "itsdangerous>=2.0.0"]
+sqlalchemy = ["sqlalchemy[asyncio]>=2.0.0"]
 
 [project.urls]
 Homepage   = "https://github.com/londarks/fastapi-flare"

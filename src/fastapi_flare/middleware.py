@@ -190,7 +190,7 @@ class RequestTrackingMiddleware(BaseHTTPMiddleware):
             "ip_address": getattr(request.client, "host", None),
             "user_agent": request.headers.get("user-agent"),
             "request_headers": dict(request.headers) if config.capture_request_headers else None,
-            "request_body": None,  # never capture response; request body is not re-read here
+            "request_body": _extract_request_body(request, config),
             "error_id": None,
         }
 
@@ -200,3 +200,24 @@ class RequestTrackingMiddleware(BaseHTTPMiddleware):
             asyncio.create_task(storage.enqueue_request(entry))
 
         return response
+
+
+def _extract_request_body(request: Request, config) -> object:
+    """Read the cached raw bytes from BodyCacheMiddleware and return a
+    decoded/parsed value ready for storage.  Returns None when body capture
+    is disabled or no bytes were cached."""
+    max_bytes: int = getattr(config, "max_request_body_bytes", 0)
+    if max_bytes <= 0:
+        return None
+    raw: bytes = request.scope.get(_SCOPE_BODY_KEY, b"") or b""
+    if not raw:
+        return None
+    raw = raw[:max_bytes]
+    content_type: str = request.headers.get("content-type", "")
+    if "json" in content_type:
+        try:
+            import json
+            return json.loads(raw)
+        except Exception:
+            pass
+    return raw.decode("utf-8", errors="replace")

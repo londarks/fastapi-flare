@@ -1,4 +1,4 @@
-{% extends "layout.html" %}
+﻿{% extends "layout.html" %}
 
 {% block header_right %}
 <label class="refresh-toggle" title="Auto-refresh every 30s">
@@ -11,9 +11,35 @@
 </label>
 {% endblock %}
 
+{% block styles %}
+.td-endpoint { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+/* ── Requests page: viewport-constrained layout (no outer scroll) ── */
+main {
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.stats  { flex-shrink: 0; margin-bottom: 0; }
+.filters { flex-shrink: 0; margin-top: 12px; margin-bottom: 0; }
+.req-table-area {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  margin-top: 16px;
+}
+.table-wrapper {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.table-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.pagination { flex-shrink: 0; }
+{% endblock %}
+
 {% block content %}
 
-  <!-- STATS -->
+  <!-- STATS + METRICS cards -->
   <div class="stats">
     <div class="stat-card">
       <span class="stat-label">Stored</span>
@@ -38,10 +64,11 @@
   </div>
 
   <!-- FILTERS -->
-  <div class="filters">
+  <div class="filters" style="margin-top:12px">
     <div class="filter-group">
       <i class="fas fa-search" style="color:var(--gray);font-size:12px"></i>
-      <input type="text" class="search-input" id="pathFilter" placeholder="Filter by path…" oninput="debounceLoad()" style="width:200px" />
+      <input type="text" class="search-input" id="pathFilter" placeholder="Filter by path…"
+             oninput="debounceLoad()" style="width:200px" />
     </div>
     <div class="filter-group">
       <span class="filter-label">Method</span>
@@ -54,57 +81,57 @@
         <button class="chip" data-method="DELETE" onclick="setMethodChip(this)">DELETE</button>
       </div>
     </div>
-    <div class="filter-group">
-      <span class="filter-label">Status</span>
-      <input type="number" id="statusFilter" placeholder="e.g. 404" style="width:90px" oninput="debounceLoad()" />
-    </div>
-    <div class="filter-group">
-      <span class="filter-label">Min ms</span>
-      <input type="number" id="minDurationFilter" placeholder="e.g. 500" style="width:90px" oninput="debounceLoad()" />
-    </div>
     <div class="filters-right">
       <button class="btn btn-ghost" onclick="clearFilters()"><i class="fas fa-xmark"></i> Clear</button>
       <button class="btn btn-red" onclick="loadRequests(1)"><i class="fas fa-rotate-right"></i> Refresh</button>
     </div>
   </div>
 
-  <!-- TABLE -->
-  <div class="table-wrapper">
-    <div class="table-header">
-      <span class="table-title">
-        <i class="fas fa-arrow-right-arrow-left" style="color:var(--red)"></i>
-        HTTP Requests
-      </span>
-      <span class="table-count" id="tableCount">—</span>
-    </div>
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:155px">Timestamp</th>
-            <th style="width:80px">Method</th>
-            <th>Path</th>
-            <th style="width:90px">Status</th>
-            <th style="width:90px">Duration</th>
-            <th style="width:80px">Details</th>
-          </tr>
-        </thead>
-        <tbody id="logsBody">
-          <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">Loading…</td></tr>
-        </tbody>
-      </table>
+  <!-- REQUEST LOG TABLE + PAGINATION (bounded flex column) -->
+  <div class="req-table-area">
+    <div class="table-wrapper">
+      <div class="table-header">
+        <span class="table-title">
+          <i class="fas fa-arrow-right-arrow-left" style="color:var(--red)"></i>
+          HTTP Requests
+        </span>
+        <span class="table-count" id="tableCount">—</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:155px">Timestamp</th>
+              <th style="width:80px">Method</th>
+              <th>Path</th>
+              <th style="width:90px">Status</th>
+              <th style="width:90px">Duration</th>
+              <th style="width:36px"></th>
+            </tr>
+          </thead>
+          <tbody id="logsBody">
+            <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">
+              <span class="spinner"></span>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- PAGINATION inside wrapper so it stays pinned at the bottom -->
+      <div class="pagination" id="pagination"></div>
     </div>
   </div>
 
-  <!-- PAGINATION -->
-  <div class="pagination" id="pagination"></div>
 
   <!-- DETAIL MODAL -->
   <div class="modal-overlay" id="detailModal" onclick="closeModal(event)">
-    <div class="modal-card">
-      <div class="modal-header">
-        <span id="modalTitle">Request detail</span>
-        <button class="modal-close" onclick="document.getElementById('detailModal').classList.remove('open')">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-level" id="modalMethodBadge"></span>
+        <span class="modal-event" id="modalPath" style="font-size:13px;color:var(--gray-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+        <span id="modalStatusBadge" style="flex-shrink:0"></span>
+        <span class="modal-time" id="modalTimestamp"></span>
+        <button class="modal-close"
+                onclick="document.getElementById('detailModal').classList.remove('open');clearActiveRow()">
           <i class="fas fa-xmark"></i>
         </button>
       </div>
@@ -116,97 +143,111 @@
 
 {% block scripts %}
 <script>
-var API_BASE = "{{ api_base }}";
-var currentPage = 1;
-var autoTimer = null;
-var debounceTimer = null;
+var API_BASE    = "{{ api_base }}";
+var ERRORS_PATH = "{{ errors_path }}";
+
+var currentPage    = 1;
+var autoTimer      = null;
+var debounceTimer  = null;
 var selectedMethod = "";
 
-/* ── Helpers ────────────────────────────────────────────────────────── */
+/* Request data store — avoids JSON-in-HTML-attribute escaping issues */
+var _reqStore = {};
+
+/* ══ BADGE HELPERS ════════════════════════════════════════════════ */
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
 function fmtTs(iso) {
   if (!iso) return "—";
   var d = new Date(iso);
   return d.toLocaleDateString() + " " + d.toLocaleTimeString();
 }
-
 function methodBadge(m) {
   var colors = { GET:"#22c55e", POST:"#3b82f6", PUT:"#f59e0b", PATCH:"#a855f7", DELETE:"#dc2626" };
   var c = colors[m] || "#6b7280";
-  return '<span style="font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44">' + (m||"—") + '</span>';
+  return '<span style="font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 7px;' +
+    'border-radius:4px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44">' +
+    esc(m || "—") + '</span>';
 }
-
 function statusBadge(s) {
-  if (!s) return "—";
+  if (s == null) return "—";
   var c = s >= 500 ? "var(--red)" : s >= 400 ? "var(--amber)" : s >= 300 ? "#60a5fa" : "var(--green)";
-  return '<span style="font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 6px;border-radius:4px;background:' + c + '22;color:' + c + '">' + s + '</span>';
+  return '<span style="font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 6px;' +
+    'border-radius:4px;background:' + c + '22;color:' + c + '">' + s + '</span>';
 }
-
 function durationBadge(ms) {
   if (ms == null) return "—";
   var c = ms > 1000 ? "var(--red)" : ms > 300 ? "var(--amber)" : "var(--green)";
   return '<span style="font-family:var(--mono);font-size:12px;color:' + c + '">' + ms + ' ms</span>';
 }
 
-/* ── Stats ────────────────────────────────────────────────────────── */
+/* ══ STATS ════════════════════════════════════════════════════════ */
 function loadStats() {
   fetch(API_BASE + "/request-stats")
     .then(function(r) { return r.json(); })
     .then(function(d) {
       document.getElementById("statTotal").textContent = d.total_stored ?? "—";
-      var cap = d.ring_buffer_size ? d.ring_buffer_size : "?";
+      var cap = d.ring_buffer_size || "?";
       var pct = d.ring_buffer_size ? Math.round((d.total_stored / d.ring_buffer_size) * 100) : 0;
       document.getElementById("statRingBuf").textContent = "of " + cap + " (" + pct + "% full)";
       document.getElementById("statReqLastHour").textContent = d.requests_last_hour ?? "—";
       document.getElementById("statErrLastHour").textContent = d.errors_last_hour ?? "—";
-      document.getElementById("statAvgDuration").textContent = d.avg_duration_ms != null ? d.avg_duration_ms + " ms" : "—";
+      document.getElementById("statAvgDuration").textContent =
+        d.avg_duration_ms != null ? d.avg_duration_ms + " ms" : "—";
       if (d.slowest_endpoint) {
+        var s = d.slowest_endpoint;
         document.getElementById("statSlowest").textContent =
-          "slowest: " + d.slowest_endpoint.substring(0, 24) + (d.slowest_endpoint.length > 24 ? "…" : "");
+          "slowest: " + (s.length > 26 ? s.substring(0, 24) + "…" : s) +
+          (d.slowest_duration_ms != null ? " (" + d.slowest_duration_ms + " ms)" : "");
       }
     })
     .catch(function() {});
 }
 
-/* ── Requests table ─────────────────────────────────────────────── */
+/* ══ REQUEST LOG TABLE ════════════════════════════════════════════ */
 function loadRequests(page) {
   currentPage = page || 1;
-  var path   = document.getElementById("pathFilter").value;
-  var status = document.getElementById("statusFilter").value;
-  var minMs  = document.getElementById("minDurationFilter").value;
+  var path = (document.getElementById("pathFilter").value || "").trim();
   var q = "?page=" + currentPage + "&limit=50";
   if (selectedMethod) q += "&method=" + encodeURIComponent(selectedMethod);
-  if (status)  q += "&status_code=" + encodeURIComponent(status);
-  if (path)    q += "&path=" + encodeURIComponent(path);
-  if (minMs)   q += "&min_duration_ms=" + encodeURIComponent(minMs);
-
+  if (path)           q += "&path="   + encodeURIComponent(path);
   fetch(API_BASE + "/requests" + q)
     .then(function(r) { return r.json(); })
     .then(function(data) { renderTable(data); renderPagination(data); })
     .catch(function() {
       document.getElementById("logsBody").innerHTML =
-        '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--red)">Failed to load requests</td></tr>';
+        '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--red)">' +
+        '<i class="fas fa-triangle-exclamation"></i> Failed to load</td></tr>';
     });
 }
 
 function renderTable(data) {
-  var tbody = document.getElementById("logsBody");
-  var count = document.getElementById("tableCount");
-  count.textContent = data.total ? data.total.toLocaleString() + " total" : "0 total";
+  document.getElementById("tableCount").textContent =
+    data.total ? data.total.toLocaleString() + " total" : "0 total";
   if (!data.requests || data.requests.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">No requests found</td></tr>';
+    document.getElementById("logsBody").innerHTML =
+      '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">No requests found</td></tr>';
     return;
   }
-  tbody.innerHTML = data.requests.map(function(r) {
+  /* Store by id — onclick passes only the id, modal reads from store */
+  _reqStore = {};
+  data.requests.forEach(function(r) { _reqStore[r.id] = r; });
+  document.getElementById("logsBody").innerHTML = data.requests.map(function(r) {
     var errorIcon = r.error_id
-      ? ' <a href="{{ errors_path }}" title="Linked error: ' + r.error_id + '" style="color:var(--red);margin-left:4px"><i class="fas fa-link"></i></a>'
+      ? ' <a href="' + ERRORS_PATH + '" title="Linked error" style="color:var(--red);margin-left:4px"' +
+        ' onclick="event.stopPropagation()"><i class="fas fa-link"></i></a>'
       : "";
-    return '<tr onclick="openDetail(' + JSON.stringify(JSON.stringify(r)).replace(/</g,"\\u003c") + ')" style="cursor:pointer">' +
+    var id = esc(r.id);
+    return '<tr data-req-id="' + id + '" onclick="openDetail(\'' + id + '\')" style="cursor:pointer">' +
       '<td style="font-family:var(--mono);font-size:12px;color:var(--gray-light)">' + fmtTs(r.timestamp) + '</td>' +
       '<td>' + methodBadge(r.method) + '</td>' +
-      '<td style="font-family:var(--mono);font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.path||"") + '">' + (r.path||"—") + errorIcon + '</td>' +
+      '<td class="td-endpoint" title="' + esc(r.path) + '">' + esc(r.path || "—") + errorIcon + '</td>' +
       '<td>' + statusBadge(r.status_code) + '</td>' +
       '<td>' + durationBadge(r.duration_ms) + '</td>' +
-      '<td><button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="event.stopPropagation();openDetail(' + JSON.stringify(JSON.stringify(r)).replace(/</g,"\\u003c") + ')"><i class="fas fa-eye"></i></button></td>' +
+      '<td style="text-align:center"><button class="btn btn-ghost" style="padding:3px 8px;font-size:11px"' +
+        ' onclick="event.stopPropagation();openDetail(\'' + id + '\')"><i class="fas fa-eye"></i></button></td>' +
       '</tr>';
   }).join("");
 }
@@ -215,95 +256,163 @@ function renderPagination(data) {
   var el = document.getElementById("pagination");
   if (!data.pages || data.pages <= 1) { el.innerHTML = ""; return; }
   var html = "";
-  if (data.page > 1)          html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page-1) + ')"><i class="fas fa-chevron-left"></i></button>';
+  if (data.page > 1)
+    html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page-1) + ')">' +
+            '<i class="fas fa-chevron-left"></i></button>';
   html += '<span style="padding:0 12px;color:var(--gray-light)">Page ' + data.page + ' / ' + data.pages + '</span>';
-  if (data.page < data.pages) html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page+1) + ')"><i class="fas fa-chevron-right"></i></button>';
+  if (data.page < data.pages)
+    html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page+1) + ')">' +
+            '<i class="fas fa-chevron-right"></i></button>';
   el.innerHTML = html;
 }
 
-/* ── Detail modal ───────────────────────────────────────────────── */
-function openDetail(jsonStr) {
-  var r = JSON.parse(jsonStr);
-  document.getElementById("modalTitle").textContent = r.method + " " + (r.path || "—") + " → " + (r.status_code || "?");
-  var rows = [
-    ["Timestamp",  fmtTs(r.timestamp)],
-    ["Request ID", r.request_id ? '<span style="font-family:var(--mono);font-size:12px;color:var(--gray-light)">' + r.request_id + '</span>' : "—"],
-    ["IP Address", r.ip_address || "—"],
-    ["User Agent", r.user_agent ? '<span style="font-size:12px;color:var(--gray-light)">' + r.user_agent + '</span>' : "—"],
-    ["Duration",   durationBadge(r.duration_ms)],
-    ["Linked Error", r.error_id ? '<a href="{{ errors_path }}" style="color:var(--red)"><i class="fas fa-link"></i> ' + r.error_id + '</a>' : "none"],
-  ];
-  var html = '<table style="width:100%;border-collapse:collapse">';
-  rows.forEach(function(row) {
-    html += '<tr><td style="padding:7px 10px;width:130px;color:var(--gray);white-space:nowrap;vertical-align:top">' + row[0] + '</td>' +
-            '<td style="padding:7px 10px">' + row[1] + '</td></tr>';
-  });
-  html += '</table>';
+/* ══ DETAIL MODAL ═════════════════════════════════════════════════ */
+var _activeRowId = null;
 
-  if (r.request_headers && Object.keys(r.request_headers).length > 0) {
-    html += '<div style="margin:12px 0 4px;padding:0 10px;font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Request Headers</div>';
-    html += '<pre style="margin:0 8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--gray-light);overflow:auto;max-height:160px">' +
-            escapeHtml(JSON.stringify(r.request_headers, null, 2)) + '</pre>';
+function clearActiveRow() {
+  if (_activeRowId) {
+    var old = document.querySelector('tr[data-req-id="' + _activeRowId + '"]');
+    if (old) old.classList.remove("row-active");
+    _activeRowId = null;
+  }
+}
+
+function openDetail(id) {
+  var r = _reqStore[id];
+  if (!r) return;
+
+  /* row highlight */
+  clearActiveRow();
+  _activeRowId = id;
+  var row = document.querySelector('tr[data-req-id="' + id + '"]');
+  if (row) row.classList.add("row-active");
+
+  /* modal header */
+  document.getElementById("modalMethodBadge").innerHTML = methodBadge(r.method);
+  document.getElementById("modalPath").textContent = r.path || "—";
+  document.getElementById("modalStatusBadge").innerHTML = statusBadge(r.status_code);
+  document.getElementById("modalTimestamp").textContent = fmtTs(r.timestamp);
+
+  /* ── meta grid ── */
+  var html = '<div class="meta-grid">';
+  html += metaItem("Duration",   durationBadge(r.duration_ms));
+  html += metaItem("Status",     statusBadge(r.status_code));
+  html += metaItem("IP Address", r.ip_address
+    ? '<span class="meta-val" style="font-size:12px">' + esc(r.ip_address) + '</span>'
+    : '<span class="meta-val none">—</span>');
+  html += metaItem("Request ID", r.request_id
+    ? '<span class="meta-val" style="font-size:11px;word-break:break-all">' + esc(r.request_id) + '</span>'
+    : '<span class="meta-val none">—</span>');
+  html += metaItem("Linked Error", r.error_id
+    ? '<a href="' + ERRORS_PATH + '" style="color:var(--red);font-size:12px;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()"><i class="fas fa-arrow-up-right-from-square"></i>' + esc(r.error_id) + '</a>'
+    : '<span class="meta-val none">none</span>');
+  html += metaItem("Method",     methodBadge(r.method));
+  html += '</div>';
+
+  /* ── user agent ── */
+  if (r.user_agent) {
+    html += detailSection("fa-globe", "Client");
+    html += '<div style="padding:8px 12px;background:var(--bg-row);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--gray-light);line-height:1.5;word-break:break-all">' + esc(r.user_agent) + '</div>';
+    html += '</div>';
   }
 
+  /* ── request headers ── */
+  if (r.request_headers && typeof r.request_headers === "object" && Object.keys(r.request_headers).length > 0) {
+    html += detailSection("fa-code", "Request Headers");
+    html += codeBlock(JSON.stringify(r.request_headers, null, 2), "modal-headers");
+    html += '</div>';
+  }
+
+  /* ── request body ── */
   if (r.request_body != null) {
-    html += '<div style="margin:12px 0 4px;padding:0 10px;font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Request Body</div>';
-    html += '<pre style="margin:0 8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--gray-light);overflow:auto;max-height:200px">' +
-            escapeHtml(JSON.stringify(r.request_body, null, 2)) + '</pre>';
+    var bodyStr = typeof r.request_body === "object"
+      ? JSON.stringify(r.request_body, null, 2)
+      : String(r.request_body);
+    html += detailSection("fa-file-code", "Request Body");
+    html += codeBlock(bodyStr, "modal-body-code");
+    html += '</div>';
   }
 
   document.getElementById("modalBody").innerHTML = html;
   document.getElementById("detailModal").classList.add("open");
 }
 
+function metaItem(key, valHtml) {
+  return '<div class="meta-item"><div class="meta-key">' + key + '</div><div class="meta-val">' + valHtml + '</div></div>';
+}
+
+function detailSection(icon, title) {
+  return '<div class="detail-section"><div class="detail-section-title"><i class="fas ' + icon + '"></i>' + title + '</div>';
+}
+
+function codeBlock(content, cbId) {
+  return '<div class="code-block-wrapper">' +
+    '<button class="copy-btn" id="' + cbId + '-btn" onclick="copyBlock(\'' + cbId + '\')"><i class="fas fa-copy"></i> Copy</button>' +
+    '<pre class="code-block" id="' + cbId + '">' + esc(content) + '</pre>' +
+    '</div>';
+}
+
+function copyBlock(cbId) {
+  var el = document.getElementById(cbId);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function() {
+    var btn = document.getElementById(cbId + "-btn");
+    if (btn) {
+      btn.classList.add("copied");
+      btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+      setTimeout(function() {
+        btn.classList.remove("copied");
+        btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+      }, 2000);
+    }
+  }).catch(function() {});
+}
+
 function closeModal(e) {
-  if (e.target === document.getElementById("detailModal"))
+  if (e.target === document.getElementById("detailModal")) {
     document.getElementById("detailModal").classList.remove("open");
+    clearActiveRow();
+  }
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-}
-
-/* ── Filters ───────────────────────────────────────────────────── */
+/* ══ FILTERS ══════════════════════════════════════════════════════ */
 function setMethodChip(el) {
   document.querySelectorAll(".chip[data-method]").forEach(function(c) { c.classList.remove("active"); });
   el.classList.add("active");
   selectedMethod = el.dataset.method;
   loadRequests(1);
 }
-
 function clearFilters() {
   document.getElementById("pathFilter").value = "";
-  document.getElementById("statusFilter").value = "";
-  document.getElementById("minDurationFilter").value = "";
   selectedMethod = "";
   document.querySelectorAll(".chip[data-method]").forEach(function(c) { c.classList.remove("active"); });
-  document.querySelector(".chip[data-method='']").classList.add("active");
+  var all = document.querySelector(".chip[data-method='']");
+  if (all) all.classList.add("active");
   loadRequests(1);
 }
-
 function debounceLoad() {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(function() { loadRequests(1); }, 350);
 }
 
-/* ── Auto-refresh ──────────────────────────────────────────────── */
+/* ══ AUTO-REFRESH ═════════════════════════════════════════════════ */
 function toggleAutoRefresh(on) {
   var dot   = document.getElementById("liveDot");
   var label = document.getElementById("refreshLabel");
   clearInterval(autoTimer);
   if (on) {
     dot.classList.remove("off");
-    label.textContent = "Live";
-    autoTimer = setInterval(function() { loadStats(); loadRequests(currentPage); }, 30000);
+    label.textContent = "Live (30s)";
+    autoTimer = setInterval(function() {
+      loadStats(); loadRequests(currentPage);
+    }, 30000);
   } else {
     dot.classList.add("off");
     label.textContent = "Auto-refresh";
   }
 }
 
-/* ── Init ──────────────────────────────────────────────────────── */
+/* ══ INIT ═════════════════════════════════════════════════════════ */
 loadStats();
 loadRequests(1);
 </script>

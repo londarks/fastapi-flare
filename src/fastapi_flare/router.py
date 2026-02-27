@@ -45,11 +45,11 @@ def make_router(config) -> APIRouter:
     """Returns a configured APIRouter. Called once during setup()."""
     router = APIRouter(prefix=config.dashboard_path, include_in_schema=False)
 
-    _errors_path   = config.dashboard_path
+    _errors_path   = config.dashboard_path + "/errors"
     _metrics_path  = config.dashboard_path + "/metrics"
     _storage_path  = config.dashboard_path + "/storage"
     _settings_path = config.dashboard_path + "/settings"
-    _requests_path = config.dashboard_path + "/requests"
+    _requests_path = config.dashboard_path
     _api_base      = config.dashboard_path + "/api"
 
     # ── PUBLIC: Health Check (no auth required) ───────────────────────────
@@ -233,14 +233,21 @@ def make_router(config) -> APIRouter:
         @router.get("")
         async def dashboard(request: Request):
             if not await _ensure_valid_session(request):
+                return RedirectResponse(url=f"{_login_path}?return_to={_requests_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="requests.html", context=_base_ctx("requests", request))
+
+        @router.get("/errors")
+        async def errors_dashboard_auth(request: Request):
+            if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_errors_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="errors.html",  context=_base_ctx("errors",  request))
 
         @router.get("/metrics")
         async def metrics_dashboard(request: Request):
+            # Metrics merged into Requests — redirect to home
             if not await _ensure_valid_session(request):
-                return RedirectResponse(url=f"{_login_path}?return_to={_metrics_path}", status_code=302)
-            return _templates.TemplateResponse(request=request, name="metrics.html", context=_base_ctx("metrics", request))
+                return RedirectResponse(url=f"{_login_path}?return_to={_requests_path}", status_code=302)
+            return RedirectResponse(url=_requests_path, status_code=302)
 
         @router.get("/storage")
         async def storage_dashboard_auth(request: Request):
@@ -256,9 +263,8 @@ def make_router(config) -> APIRouter:
 
         @router.get("/requests")
         async def requests_dashboard_auth(request: Request):
-            if not await _ensure_valid_session(request):
-                return RedirectResponse(url=f"{_login_path}?return_to={_requests_path}", status_code=302)
-            return _templates.TemplateResponse(request=request, name="requests.html", context=_base_ctx("requests", request))
+            # Requests is now home — redirect
+            return RedirectResponse(url=_requests_path, status_code=302)
 
         # -- Auth: Login — inicia fluxo PKCE ----------------------------------
 
@@ -339,11 +345,15 @@ def make_router(config) -> APIRouter:
 
         @router.get("", dependencies=deps)
         async def dashboard(request: Request):
+            return _templates.TemplateResponse(request=request, name="requests.html", context=_admin_ctx("requests"))
+
+        @router.get("/errors", dependencies=deps)
+        async def errors_dashboard(request: Request):
             return _templates.TemplateResponse(request=request, name="errors.html",  context=_admin_ctx("errors"))
 
         @router.get("/metrics", dependencies=deps)
         async def metrics_dashboard(request: Request):
-            return _templates.TemplateResponse(request=request, name="metrics.html", context=_admin_ctx("metrics"))
+            return RedirectResponse(url=_requests_path, status_code=302)
 
         @router.get("/storage", dependencies=deps)
         async def storage_dashboard(request: Request):
@@ -355,7 +365,7 @@ def make_router(config) -> APIRouter:
 
         @router.get("/requests", dependencies=deps)
         async def requests_dashboard(request: Request):
-            return _templates.TemplateResponse(request=request, name="requests.html", context=_admin_ctx("requests"))
+            return RedirectResponse(url=_requests_path, status_code=302)
 
     # =========================================================================
     # ROTAS /api — compartilhadas por ambos os modos

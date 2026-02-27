@@ -521,17 +521,13 @@
 <aside class="sidebar">
   <p class="sidebar-section-label">Navigation</p>
   <nav class="sidebar-nav">
-    <a href="{{ metrics_path }}" class="nav-item {% if active_tab == 'metrics' %}active{% endif %}">
-      <i class="fas fa-chart-simple"></i>
-      <span>Metrics</span>
+    <a href="{{ requests_path }}" class="nav-item {% if active_tab == 'requests' %}active{% endif %}">
+      <i class="fas fa-arrow-right-arrow-left"></i>
+      <span>Requests</span>
     </a>
     <a href="{{ errors_path }}" class="nav-item {% if active_tab == 'errors' %}active{% endif %}">
       <i class="fas fa-circle-exclamation"></i>
       <span>Errors</span>
-    </a>
-    <a href="{{ requests_path }}" class="nav-item {% if active_tab == 'requests' %}active{% endif %}">
-      <i class="fas fa-arrow-right-arrow-left"></i>
-      <span>Requests</span>
     </a>
     <a href="{{ storage_path }}" class="nav-item {% if active_tab == 'storage' %}active{% endif %}">
       <i class="fas fa-database"></i>

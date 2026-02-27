@@ -9,3 +9,5 @@ aiosqlite>=0.19.0
 uvicorn[standard]>=0.29.0
 fakeredis[aioredis]>=2.21.0
 hatchling>=1.21.0
+sqlalchemy[asyncio]>=2.0.0
+python-dotenv>=1.0.0
