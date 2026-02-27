@@ -1,75 +1,43 @@
+{%- from "_macros.html" import stat_card, auto_refresh_toggle, table_header,
+         filter_search, filter_actions, modal_overlay,
+         pagination_bar, loading_row -%}
 {% extends "layout.html" %}
 
-{% block header_right %}
-<label class="refresh-toggle" title="Auto-refresh every 30s">
-  <div class="live-dot off" id="liveDot"></div>
-  <span id="refreshLabel">Auto-refresh</span>
-  <label class="toggle-switch">
-    <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh(this.checked)">
-    <span class="toggle-slider"></span>
-  </label>
-</label>
-{% endblock %}
+{% block header_right %}{{ auto_refresh_toggle("30s") }}{% endblock %}
 
 {% block content %}
 
   <!-- STATS -->
   <div class="stats">
-    <div class="stat-card red">
-      <span class="stat-label">Errors (24h)</span>
-      <span class="stat-value red" id="statErrors">—</span>
-      <span class="stat-sub">last 24 hours</span>
-    </div>
-    <div class="stat-card amber">
-      <span class="stat-label">Warnings (24h)</span>
-      <span class="stat-value amber" id="statWarnings">—</span>
-      <span class="stat-sub">last 24 hours</span>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">Total stored</span>
-      <span class="stat-value" id="statTotal">—</span>
-      <span class="stat-sub">in stream</span>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">Latest error</span>
-      <span class="stat-value" id="statLastError" style="font-size:15px;padding-top:6px">—</span>
-      <span class="stat-sub" id="statLastErrorSub"></span>
-    </div>
+    {{ stat_card("Errors (24h)",   "statErrors",   "last 24 hours", "red") }}
+    {{ stat_card("Warnings (24h)", "statWarnings", "last 24 hours", "amber") }}
+    {{ stat_card("Total stored",   "statTotal",    "in stream") }}
+    {{ stat_card("Latest error",   "statLastError", "", sub_id="statLastErrorSub",
+                 value_style="font-size:15px;padding-top:6px") }}
   </div>
 
   <!-- FILTERS -->
   <div class="filters">
-    <div class="filter-group">
-      <i class="fas fa-search" style="color:var(--gray);font-size:12px"></i>
-      <input type="text" class="search-input" id="searchInput" placeholder="Search in message or error..." oninput="debounceLoad()" />
-    </div>
+    {{ filter_search("searchInput", "Search in message or error…", "debounceLoad()") }}
     <div class="filter-group">
       <span class="filter-label">Level</span>
       <div class="level-chips">
         <button class="chip active" data-level="" onclick="setLevelChip(this)">All</button>
-        <button class="chip" data-level="ERROR" onclick="setLevelChip(this)">Error</button>
+        <button class="chip" data-level="ERROR"   onclick="setLevelChip(this)">Error</button>
         <button class="chip" data-level="WARNING" onclick="setLevelChip(this)">Warning</button>
       </div>
     </div>
     <div class="filter-group">
       <span class="filter-label">Event</span>
-      <input type="text" id="eventFilter" placeholder="e.g. http_exception" style="width:180px" oninput="debounceLoad()" />
+      <input type="text" id="eventFilter" placeholder="e.g. http_exception"
+             style="width:180px" oninput="debounceLoad()" />
     </div>
-    <div class="filters-right">
-      <button class="btn btn-ghost" onclick="clearFilters()"><i class="fas fa-xmark"></i> Clear</button>
-      <button class="btn btn-red" onclick="loadLogs(1)"><i class="fas fa-rotate-right"></i> Refresh</button>
-    </div>
+    {{ filter_actions("clearFilters", "loadLogs(1)") }}
   </div>
 
   <!-- TABLE -->
   <div class="table-wrapper">
-    <div class="table-header">
-      <span class="table-title">
-        <i class="fas fa-list-ul" style="color:var(--red)"></i>
-        Log entries
-      </span>
-      <span class="table-count" id="tableCount">—</span>
-    </div>
+    {{ table_header("fa-list-ul", "Log entries", "tableCount") }}
     <div class="table-scroll">
       <table>
         <thead>
@@ -84,29 +52,25 @@
           </tr>
         </thead>
         <tbody id="logsTableBody">
-          <tr class="loading-row"><td colspan="7"><span class="spinner"></span></td></tr>
+          {{ loading_row(7) }}
         </tbody>
       </table>
     </div>
-    <div class="pagination" id="paginationBar" style="display:none">
-      <span class="pagination-info" id="paginationInfo"></span>
-      <div class="pagination-btns" id="paginationBtns"></div>
-      <span class="pagination-info" id="paginationRight" style="margin-left:auto"></span>
-    </div>
+    {{ pagination_bar("paginationBar", "paginationInfo", "paginationBtns", "paginationRight") }}
   </div>
 
   <!-- MODAL -->
-  <div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
-    <div class="modal" id="modal">
-      <div class="modal-head">
-        <span class="modal-level" id="modalLevel"></span>
-        <span class="modal-event" id="modalEvent"></span>
-        <span class="modal-time"  id="modalTime"></span>
-        <button class="modal-close" onclick="closeModalBtn()"><i class="fas fa-xmark"></i></button>
-      </div>
-      <div class="modal-body" id="modalBody"></div>
+  {% call modal_overlay("modalOverlay", "closeModal") %}
+    <div class="modal-head">
+      <span class="modal-level" id="modalLevel"></span>
+      <span class="modal-event" id="modalEvent"></span>
+      <span class="modal-time"  id="modalTime"></span>
+      <button class="modal-close" onclick="closeModalBtn()">
+        <i class="fas fa-xmark"></i>
+      </button>
     </div>
-  </div>
+    <div class="modal-body" id="modalBody"></div>
+  {% endcall %}
 
 {% endblock %}
 

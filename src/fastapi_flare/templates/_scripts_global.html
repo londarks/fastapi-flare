@@ -1,0 +1,170 @@
+{#- Global JS utilities — included once at the bottom of layout.html.
+    Each block is its own <script> tag for clarity.         -#}
+
+<script>
+/* ── TOAST ─────────────────────────────────────────────────────────────────── */
+function showToast(msg, iconClass) {
+  var container = document.getElementById('toastContainer');
+  if (!container) return;
+  var t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = '<i class="fas ' + (iconClass || 'fa-bell') + '"></i> ' + msg;
+  container.appendChild(t);
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() { t.classList.add('show'); });
+  });
+  setTimeout(function() {
+    t.classList.remove('show');
+    setTimeout(function() { t.remove(); }, 260);
+  }, 3500);
+}
+
+/* ── CLIPBOARD ─────────────────────────────────────────────────────────────── */
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(function() {
+    btn.classList.add('copied');
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+    setTimeout(function() {
+      btn.classList.remove('copied');
+      btn.innerHTML = '<i class="fas fa-copy"></i>';
+    }, 2000);
+  });
+}
+
+function codeBlock(text, extraClass) {
+  var id  = 'cb_' + Math.random().toString(36).slice(2);
+  var cls = extraClass ? ' ' + extraClass : '';
+  return '<div class="code-block-wrapper">'
+    + '<button class="copy-btn" onclick="copyCode(this,\'' + id + '\')" title="Copy to clipboard">'
+    + '<i class="fas fa-copy"></i>'
+    + '</button>'
+    + '<pre class="code-block' + cls + '" id="' + id + '">' + text + '</pre>'
+    + '</div>';
+}
+
+function copyCode(btn, id) {
+  var pre = document.getElementById(id);
+  if (!pre) return;
+  copyToClipboard(pre.textContent, btn);
+}
+
+/* ── STAT FLASH ────────────────────────────────────────────────────────────── */
+function setStatFlash(id, value) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var v = String(value);
+  if (el.textContent !== '—' && el.textContent !== v) {
+    el.classList.remove('stat-flash');
+    void el.offsetWidth;
+    el.classList.add('stat-flash');
+  }
+  el.textContent = v;
+}
+
+/* ── RELATIVE DATE ─────────────────────────────────────────────────────────── */
+function formatRelativeDate(iso) {
+  if (!iso) return '—';
+  var d   = new Date(iso);
+  var abs = d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+  var sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  var rel;
+  if (sec < 5)          rel = 'just now';
+  else if (sec < 60)    rel = sec + 's ago';
+  else if (sec < 3600)  rel = Math.floor(sec / 60) + 'm ago';
+  else if (sec < 86400) rel = Math.floor(sec / 3600) + 'h ago';
+  else                  rel = d.toLocaleDateString();
+  return '<span title="' + abs + '" style="cursor:default">' + rel + '</span>';
+}
+
+/* ── HEALTH POLLER ─────────────────────────────────────────────────────────── */
+(function () {
+  var HEALTH_URL = '{{ api_base }}'.replace('/api', '/health');
+  if (!HEALTH_URL || HEALTH_URL === '/health') return;
+
+  function setDot(id, state) {
+    var el = document.getElementById(id);
+    if (el) el.className = 'health-dot ' + state;
+  }
+  function setVal(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+  function applyHealth(d) {
+    setDot('hDotStorage', d.storage === 'ok' ? 'ok' : 'down');
+    setVal('hValStorage', (d.storage_backend || '') + (d.storage === 'ok' ? ' ok' : ' err'));
+    setDot('hDotWorker', d.worker_running ? 'ok' : 'down');
+    setVal('hValWorker', d.worker_running ? 'running' : 'stopped');
+    var qstate = d.queue_size > 100 ? 'down' : d.queue_size > 20 ? 'warn' : 'ok';
+    setDot('hDotQueue', qstate);
+    setVal('hValQueue', d.queue_size + ' pending');
+  }
+  function pollHealth() {
+    fetch(HEALTH_URL)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { applyHealth(d); })
+      .catch(function() {
+        ['hDotStorage','hDotWorker','hDotQueue'].forEach(function(id) { setDot(id,'down'); });
+        ['hValStorage','hValWorker','hValQueue'].forEach(function(id) { setVal(id,'err'); });
+      });
+  }
+  pollHealth();
+  setInterval(pollHealth, 30000);
+})();
+</script>
+
+<script>
+/* ── PROFILE PILL DROPDOWN ─────────────────────────────────────────────────── */
+(function () {
+  var pill = document.getElementById('profilePill');
+  if (!pill) return;
+  pill.addEventListener('click', function(e) {
+    if (e.target.closest('a')) return;
+    pill.classList.toggle('open');
+  });
+  document.addEventListener('click', function(e) {
+    if (!pill.contains(e.target)) pill.classList.remove('open');
+  });
+})();
+</script>
+
+<script>
+/* ── SIDEBAR TOGGLE ────────────────────────────────────────────────────────── */
+(function () {
+  var STORAGE_KEY = 'flare_sidebar_collapsed';
+  var sidebar = document.querySelector('.sidebar');
+  var toggle  = document.getElementById('sidebarToggle');
+  var icon    = document.getElementById('sidebarToggleIcon');
+
+  function applyState(collapsed, animate) {
+    if (!animate) {
+      sidebar.style.transition = 'none';
+      document.body.style.transition = 'none';
+    }
+    if (collapsed) {
+      document.body.classList.add('sidebar-collapsed');
+      sidebar.classList.add('collapsed');
+      icon.className     = 'fas fa-bars-staggered';
+      toggle.title       = 'Show sidebar';
+    } else {
+      document.body.classList.remove('sidebar-collapsed');
+      sidebar.classList.remove('collapsed');
+      icon.className     = 'fas fa-bars';
+      toggle.title       = 'Hide sidebar';
+    }
+    if (!animate) {
+      sidebar.offsetHeight;
+      sidebar.style.transition = '';
+      document.body.style.transition = '';
+    }
+  }
+
+  var saved = localStorage.getItem(STORAGE_KEY);
+  applyState(saved === '1', false);
+
+  toggle.addEventListener('click', function() {
+    var nowCollapsed = !sidebar.classList.contains('collapsed');
+    applyState(nowCollapsed, true);
+    localStorage.setItem(STORAGE_KEY, nowCollapsed ? '1' : '0');
+  });
+})();
+</script>

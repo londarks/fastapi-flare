@@ -1,102 +1,53 @@
-﻿{% extends "layout.html" %}
-
-{% block header_right %}
-<label class="refresh-toggle" title="Auto-refresh every 30s">
-  <div class="live-dot off" id="liveDot"></div>
-  <span id="refreshLabel">Auto-refresh</span>
-  <label class="toggle-switch">
-    <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh(this.checked)">
-    <span class="toggle-slider"></span>
-  </label>
-</label>
-{% endblock %}
+{%- from "_macros.html" import stat_card, auto_refresh_toggle, table_header,
+         filter_search, filter_actions, modal_overlay,
+         pagination_bar, loading_row -%}
+{% extends "layout.html" %}
 
 {% block styles %}
-.td-endpoint { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
-/* ── Requests page: viewport-constrained layout (no outer scroll) ── */
-main {
-  height: calc(100vh - 56px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.stats  { flex-shrink: 0; margin-bottom: 0; }
-.filters { flex-shrink: 0; margin-top: 12px; margin-bottom: 0; }
-.req-table-area {
-  flex: 1; min-height: 0;
-  display: flex; flex-direction: column;
-  overflow: hidden;
-  margin-top: 16px;
-}
-.table-wrapper {
-  flex: 1; min-height: 0;
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-.table-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.pagination { flex-shrink: 0; }
+.td-endpoint { max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:12px; }
+/* Requests page: viewport-constrained layout (no outer scroll) */
+main { height:calc(100vh - 56px); overflow:hidden; display:flex; flex-direction:column; }
+.stats   { flex-shrink:0; margin-bottom:0; }
+.filters { flex-shrink:0; margin-top:12px; margin-bottom:0; }
+.req-table-area { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; margin-top:16px; }
+.table-wrapper  { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.table-scroll   { flex:1; min-height:0; overflow-y:auto; }
+.pagination     { flex-shrink:0; }
 {% endblock %}
+
+{% block header_right %}{{ auto_refresh_toggle("30s") }}{% endblock %}
 
 {% block content %}
 
-  <!-- STATS + METRICS cards -->
+  <!-- STATS -->
   <div class="stats">
-    <div class="stat-card">
-      <span class="stat-label">Stored</span>
-      <span class="stat-value" id="statTotal">—</span>
-      <span class="stat-sub" id="statRingBuf">ring buffer</span>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">Requests (1h)</span>
-      <span class="stat-value" id="statReqLastHour">—</span>
-      <span class="stat-sub">last hour</span>
-    </div>
-    <div class="stat-card red">
-      <span class="stat-label">Errors (1h)</span>
-      <span class="stat-value red" id="statErrLastHour">—</span>
-      <span class="stat-sub">4xx / 5xx last hour</span>
-    </div>
-    <div class="stat-card amber">
-      <span class="stat-label">Avg duration</span>
-      <span class="stat-value amber" id="statAvgDuration">—</span>
-      <span class="stat-sub" id="statSlowest"></span>
-    </div>
+    {{ stat_card("Stored",          "statTotal",       "ring buffer",           sub_id="statRingBuf") }}
+    {{ stat_card("Requests (1h)",   "statReqLastHour", "last hour") }}
+    {{ stat_card("Errors (1h)",     "statErrLastHour", "4xx / 5xx last hour",   "red") }}
+    {{ stat_card("Avg duration",    "statAvgDuration", "",                      "amber", sub_id="statSlowest") }}
   </div>
 
   <!-- FILTERS -->
   <div class="filters" style="margin-top:12px">
-    <div class="filter-group">
-      <i class="fas fa-search" style="color:var(--gray);font-size:12px"></i>
-      <input type="text" class="search-input" id="pathFilter" placeholder="Filter by path…"
-             oninput="debounceLoad()" style="width:200px" />
-    </div>
+    {{ filter_search("pathFilter", "Filter by path…", "debounceLoad()") }}
     <div class="filter-group">
       <span class="filter-label">Method</span>
       <div class="level-chips">
-        <button class="chip active" data-method="" onclick="setMethodChip(this)">All</button>
-        <button class="chip" data-method="GET"    onclick="setMethodChip(this)">GET</button>
-        <button class="chip" data-method="POST"   onclick="setMethodChip(this)">POST</button>
-        <button class="chip" data-method="PUT"    onclick="setMethodChip(this)">PUT</button>
-        <button class="chip" data-method="PATCH"  onclick="setMethodChip(this)">PATCH</button>
-        <button class="chip" data-method="DELETE" onclick="setMethodChip(this)">DELETE</button>
+        <button class="chip active" data-method=""       onclick="setMethodChip(this)">All</button>
+        <button class="chip"        data-method="GET"    onclick="setMethodChip(this)">GET</button>
+        <button class="chip"        data-method="POST"   onclick="setMethodChip(this)">POST</button>
+        <button class="chip"        data-method="PUT"    onclick="setMethodChip(this)">PUT</button>
+        <button class="chip"        data-method="PATCH"  onclick="setMethodChip(this)">PATCH</button>
+        <button class="chip"        data-method="DELETE" onclick="setMethodChip(this)">DELETE</button>
       </div>
     </div>
-    <div class="filters-right">
-      <button class="btn btn-ghost" onclick="clearFilters()"><i class="fas fa-xmark"></i> Clear</button>
-      <button class="btn btn-red" onclick="loadRequests(1)"><i class="fas fa-rotate-right"></i> Refresh</button>
-    </div>
+    {{ filter_actions("clearFilters", "loadRequests(1)") }}
   </div>
 
-  <!-- REQUEST LOG TABLE + PAGINATION (bounded flex column) -->
+  <!-- TABLE -->
   <div class="req-table-area">
     <div class="table-wrapper">
-      <div class="table-header">
-        <span class="table-title">
-          <i class="fas fa-arrow-right-arrow-left" style="color:var(--red)"></i>
-          HTTP Requests
-        </span>
-        <span class="table-count" id="tableCount">—</span>
-      </div>
+      {{ table_header("fa-arrow-right-arrow-left", "HTTP Requests", "tableCount") }}
       <div class="table-scroll">
         <table>
           <thead>
@@ -110,34 +61,29 @@ main {
             </tr>
           </thead>
           <tbody id="logsBody">
-            <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">
-              <span class="spinner"></span>
-            </td></tr>
+            {{ loading_row(6) }}
           </tbody>
         </table>
       </div>
-      <!-- PAGINATION inside wrapper so it stays pinned at the bottom -->
       <div class="pagination" id="pagination"></div>
     </div>
   </div>
 
-
   <!-- DETAIL MODAL -->
-  <div class="modal-overlay" id="detailModal" onclick="closeModal(event)">
-    <div class="modal">
-      <div class="modal-head">
-        <span class="modal-level" id="modalMethodBadge"></span>
-        <span class="modal-event" id="modalPath" style="font-size:13px;color:var(--gray-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
-        <span id="modalStatusBadge" style="flex-shrink:0"></span>
-        <span class="modal-time" id="modalTimestamp"></span>
-        <button class="modal-close"
-                onclick="document.getElementById('detailModal').classList.remove('open');clearActiveRow()">
-          <i class="fas fa-xmark"></i>
-        </button>
-      </div>
-      <div class="modal-body" id="modalBody"></div>
+  {% call modal_overlay("detailModal", "closeModal") %}
+    <div class="modal-head">
+      <span class="modal-level" id="modalMethodBadge"></span>
+      <span class="modal-event" id="modalPath"
+            style="font-size:13px;color:var(--gray-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+      <span id="modalStatusBadge" style="flex-shrink:0"></span>
+      <span class="modal-time" id="modalTimestamp"></span>
+      <button class="modal-close"
+              onclick="document.getElementById('detailModal').classList.remove('open');clearActiveRow()">
+        <i class="fas fa-xmark"></i>
+      </button>
     </div>
-  </div>
+    <div class="modal-body" id="modalBody"></div>
+  {% endcall %}
 
 {% endblock %}
 

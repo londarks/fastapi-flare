@@ -1,0 +1,153 @@
+{#
+  _macros.html — Reusable Jinja2 components.
+  Import with: {% from "_macros.html" import stat_card, auto_refresh_toggle, ... %}
+  Use call block for modal: {% call m.modal_overlay(...) %} ... {% endcall %}
+#}
+
+{# ─── STAT CARD ─────────────────────────────────────────────────────────────
+   label      : visible label text
+   value_id   : DOM id for the big number (filled by JS via setStatFlash)
+   sub        : small subtitle text below the number
+   variant    : "" | "red" | "amber" | "green"  (drives color + left border)
+   sub_id     : optional DOM id for the sub text (when JS updates it too)
+   value_style: optional inline style string for the value span
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro stat_card(label, value_id, sub, variant="", sub_id="", value_style="") %}
+<div class="stat-card {{ variant }}">
+  <span class="stat-label">{{ label }}</span>
+  <span class="stat-value {{ variant }}" id="{{ value_id }}"
+    {%- if value_style %} style="{{ value_style }}"{% endif %}>—</span>
+  <span class="stat-sub"
+    {%- if sub_id %} id="{{ sub_id }}"{% endif %}>{{ sub }}</span>
+</div>
+{% endmacro %}
+
+
+{# ─── AUTO-REFRESH TOGGLE ────────────────────────────────────────────────────
+   Renders the auto-refresh label + live dot + toggle switch used in the
+   header_right block.  Page script must implement toggleAutoRefresh(bool).
+   interval: display string shown in the title tooltip (e.g. "30s", "10s")
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro auto_refresh_toggle(interval="30s") %}
+<label class="refresh-toggle" title="Auto-refresh every {{ interval }}">
+  <div class="live-dot off" id="liveDot"></div>
+  <span id="refreshLabel">Auto-refresh</span>
+  <label class="toggle-switch">
+    <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh(this.checked)">
+    <span class="toggle-slider"></span>
+  </label>
+</label>
+{% endmacro %}
+
+
+{# ─── TABLE HEADER ───────────────────────────────────────────────────────────
+   icon     : Font Awesome class, e.g. "fa-list-ul"
+   title    : displayed text
+   count_id : DOM id for the count badge (filled by JS)
+   extra    : raw HTML injected after the count badge (e.g. a Refresh button)
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro table_header(icon, title, count_id, extra="") %}
+<div class="table-header">
+  <span class="table-title">
+    <i class="fas {{ icon }}" style="color:var(--red)"></i>
+    {{ title }}
+  </span>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="table-count" id="{{ count_id }}">—</span>
+    {{ extra | safe }}
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ─── FILTER SEARCH INPUT ────────────────────────────────────────────────────
+   input_id   : DOM id for the <input>
+   placeholder: placeholder text
+   oninput_fn : JS expression for the oninput handler (e.g. "debounceLoad()")
+   width      : CSS width string (default "200px")
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro filter_search(input_id, placeholder, oninput_fn, width="200px") %}
+<div class="filter-group">
+  <i class="fas fa-search" style="color:var(--gray);font-size:12px"></i>
+  <input type="text" class="search-input" id="{{ input_id }}"
+         placeholder="{{ placeholder }}" oninput="{{ oninput_fn }}"
+         style="width:{{ width }}" />
+</div>
+{% endmacro %}
+
+
+{# ─── FILTER ACTIONS ─────────────────────────────────────────────────────────
+   clear_fn           : JS function name for the Clear button (called with "()")
+   refresh_expression : full JS expression for the Refresh button onclick
+   refresh_label      : button label (default "Refresh")
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro filter_actions(clear_fn, refresh_expression, refresh_label="Refresh") %}
+<div class="filters-right">
+  <button class="btn btn-ghost" onclick="{{ clear_fn }}()">
+    <i class="fas fa-xmark"></i> Clear
+  </button>
+  <button class="btn btn-red" onclick="{{ refresh_expression }}">
+    <i class="fas fa-rotate-right"></i> {{ refresh_label }}
+  </button>
+</div>
+{% endmacro %}
+
+
+{# ─── MODAL OVERLAY ──────────────────────────────────────────────────────────
+   Use with a {% call %} block so the caller controls the modal head + body:
+
+     {% call m.modal_overlay("detailModal", "closeModal") %}
+       <div class="modal-head"> ... </div>
+       <div class="modal-body" id="modalBody"></div>
+     {% endcall %}
+
+   overlay_id     : DOM id for the backdrop overlay
+   close_event_fn : JS function name called with `(event)` on backdrop click
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro modal_overlay(overlay_id, close_event_fn) %}
+<div class="modal-overlay" id="{{ overlay_id }}" onclick="{{ close_event_fn }}(event)">
+  <div class="modal">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ─── PAGINATION BAR ─────────────────────────────────────────────────────────
+   bar_id  : DOM id for the outer .pagination container
+   info_id : DOM id for the left info span ("1–15 of 320")
+   btns_id : DOM id for the .pagination-btns container
+   right_id: DOM id for the optional right-side info span (can be "")
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro pagination_bar(bar_id, info_id="", btns_id="", right_id="") %}
+<div class="pagination" id="{{ bar_id }}" style="display:none">
+  {% if info_id %}<span class="pagination-info" id="{{ info_id }}"></span>{% endif %}
+  {% if btns_id %}<div class="pagination-btns" id="{{ btns_id }}"></div>{% endif %}
+  {% if right_id %}<span class="pagination-info" id="{{ right_id }}" style="margin-left:auto"></span>{% endif %}
+</div>
+{% endmacro %}
+
+
+{# ─── EMPTY STATE ────────────────────────────────────────────────────────────
+   icon    : Font Awesome class, e.g. "fa-circle-check"
+   message : text shown below the icon
+   cols    : colspan for the wrapping <td> (default 6)
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro empty_state(icon, message, cols=6) %}
+<tr><td colspan="{{ cols }}">
+  <div class="empty-state">
+    <i class="fas {{ icon }}"></i>
+    <p>{{ message }}</p>
+  </div>
+</td></tr>
+{% endmacro %}
+
+
+{# ─── LOADING ROW ────────────────────────────────────────────────────────────
+   cols: colspan for the spinner cell (default 6)
+   ─────────────────────────────────────────────────────────────────────────── #}
+{% macro loading_row(cols=6) %}
+<tr class="loading-row">
+  <td colspan="{{ cols }}"><span class="spinner"></span></td>
+</tr>
+{% endmacro %}
