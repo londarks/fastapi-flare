@@ -64,9 +64,16 @@ CREATE TABLE IF NOT EXISTS {table} (
     request_body JSONB
 );
 
-CREATE INDEX IF NOT EXISTS idx_{table}_timestamp ON {table} (timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_{table}_level     ON {table} (level);
-CREATE INDEX IF NOT EXISTS idx_{table}_endpoint  ON {table} (endpoint);
+-- Single-column indexes for basic filtering and ORDER BY
+CREATE INDEX IF NOT EXISTS idx_{table}_timestamp  ON {table} (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_{table}_level      ON {table} (level);
+CREATE INDEX IF NOT EXISTS idx_{table}_endpoint   ON {table} (endpoint);
+CREATE INDEX IF NOT EXISTS idx_{table}_event      ON {table} (event);
+CREATE INDEX IF NOT EXISTS idx_{table}_http_status ON {table} (http_status);
+
+-- Composite index: covers get_stats queries (level filter + time range in one scan)
+-- e.g. COUNT(*) FILTER (WHERE level = 'ERROR' AND timestamp > $1)
+CREATE INDEX IF NOT EXISTS idx_{table}_level_ts   ON {table} (level, timestamp DESC);
 """
 
 
@@ -90,6 +97,7 @@ class PostgreSQLStorage:
     def __init__(self, config: "FlareConfig") -> None:
         self._config = config
         self._pool: Any = None  # asyncpg.Pool, created on first use
+        self._last_retention_at: Optional[datetime] = None  # throttle for flush()
 
     @property
     def _table(self) -> str:
@@ -185,17 +193,27 @@ class PostgreSQLStorage:
 
     async def flush(self) -> None:
         """
-        Apply retention policies.  Called every ``worker_interval_seconds``
-        by the background worker.
+        Apply retention policies. Called every ``worker_interval_seconds``
+        by the background worker, but the actual DELETEs run at most once
+        every ``retention_check_interval_minutes`` (default 60 min) to avoid
+        unnecessary database load.
 
         Steps:
-          1. Delete rows older than ``retention_hours``.
+          1. Delete rows older than ``retention_hours`` (default 7 days).
           2. Delete the oldest rows exceeding ``max_entries`` (count-based cap).
         """
+        config = self._config
+        interval = config.retention_check_interval_minutes
+        now = datetime.now(tz=timezone.utc)
+
+        if interval > 0 and self._last_retention_at is not None:
+            elapsed = (now - self._last_retention_at).total_seconds() / 60
+            if elapsed < interval:
+                return  # not time yet — skip this cycle
+
         try:
             pool = await self._ensure_pool()
-            config = self._config
-            cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=config.retention_hours)
+            cutoff = now - timedelta(hours=config.retention_hours)
 
             async with pool.acquire() as conn:
                 # Time-based retention
@@ -215,6 +233,8 @@ class PostgreSQLStorage:
                     """,
                     config.max_entries,
                 )
+
+            self._last_retention_at = now
         except Exception:  # noqa: BLE001
             pass
 

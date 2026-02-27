@@ -29,6 +29,12 @@ class FlareConfig(BaseSettings):
     # ── Storage limits ───────────────────────────────────────────────────────
     max_entries: int = 10_000
     retention_hours: int = 168  # 7 days
+    # How often the background worker actually runs the retention DELETE.
+    # The worker loop runs every worker_interval_seconds, but the expensive
+    # DELETE queries only execute once per this interval to avoid overhead.
+    # Default: 60 minutes. Set to 0 to run on every worker cycle.
+    # Env: FLARE_RETENTION_CHECK_INTERVAL_MINUTES
+    retention_check_interval_minutes: int = 60
 
     # ── Dashboard ────────────────────────────────────────────────────────────
     dashboard_path: str = "/flare"

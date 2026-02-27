@@ -50,9 +50,13 @@ CREATE TABLE IF NOT EXISTS logs (
     request_body TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
-CREATE INDEX IF NOT EXISTS idx_logs_level     ON logs(level);
-CREATE INDEX IF NOT EXISTS idx_logs_endpoint  ON logs(endpoint);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp   ON logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_logs_level       ON logs(level);
+CREATE INDEX IF NOT EXISTS idx_logs_endpoint    ON logs(endpoint);
+CREATE INDEX IF NOT EXISTS idx_logs_event       ON logs(event);
+CREATE INDEX IF NOT EXISTS idx_logs_http_status ON logs(http_status);
+-- Composite: covers level filter + time range in the same scan (used by get_stats)
+CREATE INDEX IF NOT EXISTS idx_logs_level_ts    ON logs(level, timestamp DESC);
 """
 
 
@@ -73,7 +77,8 @@ class SQLiteStorage:
 
     def __init__(self, config: "FlareConfig") -> None:
         self._config = config
-        self._db: Any = None  # aiosqlite.Connection, set on first use
+        self._db: Any = None
+        self._last_retention_at: Optional[datetime] = None  # throttle for flush()  # aiosqlite.Connection, set on first use
 
     # ── Lazy init ─────────────────────────────────────────────────────────
 
@@ -155,16 +160,25 @@ class SQLiteStorage:
         Delete rows older than ``retention_hours`` and enforce ``max_entries``
         by removing the oldest excess rows.
 
-        Called every ``worker_interval_seconds`` by the background worker.
+        Called every ``worker_interval_seconds`` by the background worker, but
+        the actual DELETEs run at most once every
+        ``retention_check_interval_minutes`` (default 60 min) to avoid
+        unnecessary I/O on the SQLite file.
         """
+        config = self._config
+        interval = config.retention_check_interval_minutes
+        now = datetime.now(tz=timezone.utc)
+
+        if interval > 0 and self._last_retention_at is not None:
+            elapsed = (now - self._last_retention_at).total_seconds() / 60
+            if elapsed < interval:
+                return  # not time yet — skip this cycle
+
         try:
             db = await self._ensure_db()
-            config = self._config
 
             # Time-based retention
-            cutoff = (
-                datetime.now(tz=timezone.utc) - timedelta(hours=config.retention_hours)
-            ).isoformat()
+            cutoff = (now - timedelta(hours=config.retention_hours)).isoformat()
             await db.execute("DELETE FROM logs WHERE timestamp < ?", (cutoff,))
 
             # Count-based cap: keep only the newest max_entries rows
@@ -179,6 +193,7 @@ class SQLiteStorage:
             )
 
             await db.commit()
+            self._last_retention_at = now
         except Exception:
             pass
 
