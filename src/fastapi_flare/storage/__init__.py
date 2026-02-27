@@ -28,8 +28,10 @@ def make_storage(config: "FlareConfig") -> FlareStorageProtocol:
 
     Supported values:
 
-    * ``"redis"`` (default) — :class:`~fastapi_flare.storage.redis_storage.RedisStorage`
-    * ``"sqlite"``          — :class:`~fastapi_flare.storage.sqlite_storage.SQLiteStorage`
+    * ``"sqlite"`` (default)  — :class:`~fastapi_flare.storage.sqlite_storage.SQLiteStorage`
+      Zero-config local file, ideal for development and quick testing.
+    * ``"postgresql"``        — :class:`~fastapi_flare.storage.pg_storage.PostgreSQLStorage`
+      Production-grade backend, requires a running PostgreSQL instance.
 
     Args:
         config: The resolved :class:`~fastapi_flare.config.FlareConfig`.
@@ -42,15 +44,15 @@ def make_storage(config: "FlareConfig") -> FlareStorageProtocol:
     """
     backend = config.storage_backend
 
-    if backend == "redis":
-        from fastapi_flare.storage.redis_storage import RedisStorage
-        return RedisStorage(config)
-
     if backend == "sqlite":
         from fastapi_flare.storage.sqlite_storage import SQLiteStorage
         return SQLiteStorage(config)
 
+    if backend == "postgresql":
+        from fastapi_flare.storage.pg_storage import PostgreSQLStorage
+        return PostgreSQLStorage(config)
+
     raise ValueError(
         f"Unknown storage_backend: '{backend}'. "
-        "Supported values: 'redis', 'sqlite'."
+        "Supported values: 'postgresql', 'sqlite'."
     )

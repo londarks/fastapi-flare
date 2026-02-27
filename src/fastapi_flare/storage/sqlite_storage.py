@@ -67,7 +67,7 @@ class SQLiteStorage:
 
     Suitable for:
       - Development / local environments.
-      - Single-process deployments where Redis is unavailable.
+      - Single-process deployments without a PostgreSQL instance.
       - Lightweight self-hosted setups that don't need horizontal scaling.
     """
 

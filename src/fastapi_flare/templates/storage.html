@@ -177,7 +177,7 @@
 
   // ── RENDER ───────────────────────────────────────────────────────────────
   function render(d) {
-    const isRedis  = d.backend === 'redis';
+    const isPg     = d.backend === 'postgresql';
     const overlay  = document.getElementById('clearOverlay');
 
     // Status banner
@@ -210,24 +210,23 @@
       <span class="stat-sub">${d.backend}</span>
     </div>`;
 
-    // Card 2: Entries / Rows
-    const entryCount  = isRedis ? (d.stream_length ?? 0) : (d.row_count ?? 0);
-    const entryLabel  = isRedis ? 'Stream Entries' : 'Total Rows';
-    const entryClass  = entryCount > d.max_entries * 0.9 ? 'red' : entryCount > d.max_entries * 0.7 ? 'amber' : '';
+    // Card 2: Total Rows
+    const entryCount = d.row_count ?? 0;
+    const entryClass = entryCount > d.max_entries * 0.9 ? 'red' : entryCount > d.max_entries * 0.7 ? 'amber' : '';
     cards += `<div class="stat-card ${entryClass}">
-      <span class="stat-label">${entryLabel}</span>
+      <span class="stat-label">Total Rows</span>
       <span class="stat-value ${entryClass}">${entryCount.toLocaleString()}</span>
       <span class="stat-sub">max ${d.max_entries.toLocaleString()}</span>
     </div>`;
 
-    // Card 3: Redis → Queue | SQLite → File Size
-    if (isRedis) {
-      const q       = d.queue_size ?? 0;
-      const qClass  = q > 100 ? 'red' : q > 20 ? 'amber' : '';
-      cards += `<div class="stat-card ${qClass}">
-        <span class="stat-label">Queue Buffer</span>
-        <span class="stat-value ${qClass}">${q.toLocaleString()}</span>
-        <span class="stat-sub">pending flush</span>
+    // Card 3: PostgreSQL → Pool Size | SQLite → File Size
+    if (isPg) {
+      const idle  = d.pool_idle ?? '—';
+      const total = d.pool_size ?? '—';
+      cards += `<div class="stat-card">
+        <span class="stat-label">Connection Pool</span>
+        <span class="stat-value" style="font-size:22px">${idle} / ${total}</span>
+        <span class="stat-sub">idle / total</span>
       </div>`;
     } else {
       const sz      = d.file_size_bytes ?? 0;
@@ -239,18 +238,18 @@
       </div>`;
     }
 
-    // Card 4: Redis → Memory | SQLite → WAL
-    if (isRedis) {
-      const mem     = d.memory_bytes != null ? fmtBytes(d.memory_bytes) : '—';
+    // Card 4: PostgreSQL → PG Version | SQLite → WAL
+    if (isPg) {
+      const ver = d.pg_version ? d.pg_version.split(' ').slice(0, 2).join(' ') : '—';
       cards += `<div class="stat-card">
-        <span class="stat-label">Stream Memory</span>
-        <span class="stat-value" style="font-size:22px">${mem}</span>
-        <span class="stat-sub">approx. stream key</span>
+        <span class="stat-label">PG Version</span>
+        <span class="stat-value" style="font-size:18px">${ver}</span>
+        <span class="stat-sub">server</span>
       </div>`;
     } else {
-      const walOk   = d.wal_active;
-      const walCol  = walOk ? 'var(--green)' : 'var(--amber)';
-      const walTxt  = walOk == null ? '—' : (walOk ? 'Active' : 'Inactive');
+      const walOk  = d.wal_active;
+      const walCol = walOk ? 'var(--green)' : 'var(--amber)';
+      const walTxt = walOk == null ? '—' : (walOk ? 'Active' : 'Inactive');
       cards += `<div class="stat-card ${walOk ? 'green' : 'amber'}">
         <span class="stat-label">WAL Mode</span>
         <span class="stat-value" style="font-size:20px;color:${walCol}">${walTxt}</span>
@@ -262,20 +261,20 @@
 
     // Info grid
     let items = '';
-    if (isRedis) {
-      items += infoItem('Stream Key',    d.stream_key    || '—');
-      items += infoItem('Queue Key',     d.queue_key     || '—');
-      items += infoItem('Last Entry',    d.last_entry_ts ? formatRelativeDate(d.last_entry_ts) : '—');
-      items += infoItem('Max Entries',   d.max_entries.toLocaleString());
-      items += infoItem('Retention',     retentionLabel);
-      items += infoItem('Stream Length', (d.stream_length ?? 0).toLocaleString() + ' entries');
+    if (isPg) {
+      items += infoItem('DSN',         d.dsn         || '—');
+      items += infoItem('PG Version',  d.pg_version  || '—');
+      items += infoItem('Pool Size',   d.pool_size   != null ? d.pool_size  + ' conns' : '—');
+      items += infoItem('Pool Idle',   d.pool_idle   != null ? d.pool_idle  + ' conns' : '—');
+      items += infoItem('Max Entries', d.max_entries.toLocaleString());
+      items += infoItem('Retention',   retentionLabel);
     } else {
-      items += infoItem('File Path',     d.db_path || '—');
-      items += infoItem('File Size',     fmtBytes(d.file_size_bytes ?? 0));
-      items += infoItem('Row Count',     (d.row_count ?? 0).toLocaleString() + ' rows');
-      items += infoItem('WAL Mode',      d.wal_active == null ? '—' : (d.wal_active ? 'WAL' : 'DELETE'));
-      items += infoItem('Max Entries',   d.max_entries.toLocaleString());
-      items += infoItem('Retention',     retentionLabel);
+      items += infoItem('File Path',   d.db_path || '—');
+      items += infoItem('File Size',   fmtBytes(d.file_size_bytes ?? 0));
+      items += infoItem('Row Count',   (d.row_count ?? 0).toLocaleString() + ' rows');
+      items += infoItem('WAL Mode',    d.wal_active == null ? '—' : (d.wal_active ? 'WAL' : 'DELETE'));
+      items += infoItem('Max Entries', d.max_entries.toLocaleString());
+      items += infoItem('Retention',   retentionLabel);
     }
     document.getElementById('infoGrid').innerHTML = items;
   }

@@ -14,7 +14,7 @@ All notifiers are *fire-and-forget*: they run as background asyncio tasks
 and silently swallow any exception so a delivery failure never impacts the
 request path.
 
-Cooldown / dedup is managed inside ``queue.push_log`` based on
+Cooldown / dedup is managed inside ``alerting.schedule_notifications`` based on
 ``FlareConfig.alert_cooldown_seconds``.
 
 Usage::
@@ -23,7 +23,7 @@ Usage::
     from fastapi_flare.notifiers import SlackNotifier, DiscordNotifier
 
     setup(app, config=FlareConfig(
-        redis_url="redis://localhost:6379",
+        pg_dsn="postgresql://user:pass@localhost:5432/mydb",
         alert_notifiers=[
             SlackNotifier("https://hooks.slack.com/services/T00/B00/xxx"),
             DiscordNotifier("https://discord.com/api/webhooks/..."),

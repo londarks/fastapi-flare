@@ -8,7 +8,7 @@ signed by a Zitadel identity provider, protecting the /flare dashboard.
 Quickstart — automatic wiring via FlareConfig::
 
     setup(app, config=FlareConfig(
-        redis_url="redis://localhost:6379",
+        pg_dsn="postgresql://user:pass@localhost:5432/mydb",
         zitadel_domain="auth.mycompany.com",
         zitadel_client_id="000000000000000001",
         zitadel_project_id="000000000000000002",
@@ -52,7 +52,8 @@ _security = HTTPBearer(
 
 # ── Module-level JWKS cache: domain → raw JWKS dict ─────────────────────────
 # Populated lazily on first request; cleared via clear_jwks_cache().
-# For multi-process deployments, consider upgrading to Redis-backed caching.
+# For multi-process deployments, consider using a shared cache
+# (e.g. a PostgreSQL table or external store) for JWKS caching.
 _jwks_cache: Dict[str, Any] = {}
 
 

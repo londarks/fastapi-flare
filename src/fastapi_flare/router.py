@@ -9,7 +9,7 @@ Registers routes under config.dashboard_path:
   GET /flare/api/metrics   -> In-memory endpoint metrics (FlareMetricsSnapshot)
 
 The router speaks only to the storage protocol and the metrics aggregator.
-It has no knowledge of whether Redis, SQLite, or any other backend is in use.
+It has no knowledge of whether PostgreSQL, SQLite, or any other backend is in use.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def make_router(config) -> APIRouter:
         """
         storage     = config.storage_instance
         worker      = config.worker_instance
-        backend     = config.storage_backend  # "redis" | "sqlite"
+        backend     = config.storage_backend  # "postgresql" | "sqlite"
 
         worker_running  = worker.is_running  if worker  else False
         flush_cycles    = worker.flush_cycles if worker else 0

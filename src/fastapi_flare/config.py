@@ -10,35 +10,21 @@ class FlareConfig(BaseSettings):
     """
     Configuration for fastapi-flare.
 
-    All fields can be set via environment variables with the FLARE_ prefix,
-    or loaded from a .env file automatically.
+    All fields can be set via environment variables with the ``FLARE_`` prefix,
+    or loaded from a ``.env`` file automatically.
 
-    Redis can be configured two ways:
+    PostgreSQL connection string examples::
 
-    Option A — individual fields (recommended, avoids URL-encoding issues):
-        FLARE_REDIS_HOST=myhost
-        FLARE_REDIS_PORT=6379
-        FLARE_REDIS_PASSWORD=my&special#password
-        FLARE_REDIS_DB=1
-
-    Option B — full URL (takes precedence when set):
-        FLARE_REDIS_URL=redis://:password@myhost:6379/1
+        FLARE_PG_DSN=postgresql://user:pass@localhost:5432/mydb
+        FLARE_PG_DSN=postgresql://user:pass@db.example.com:5432/flare?sslmode=require
     """
 
-    # ── Redis: individual fields (Option A — recommended) ────────────────────
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-    redis_password: Optional[str] = None
-    redis_db: int = 0
-
-    # ── Redis: full URL override (Option B) ──────────────────────────────────
-    # When set, takes precedence over the individual fields above.
-    # Note: special characters in passwords must be percent-encoded in URLs.
-    redis_url: Optional[str] = None
-
-    # ── Redis key names ──────────────────────────────────────────────────────
-    queue_key: str = "flare:queue"
-    stream_key: str = "flare:logs"
+    # ── PostgreSQL ───────────────────────────────────────
+    # Full asyncpg-compatible DSN. Required when storage_backend="postgresql".
+    #
+    # Environment variable:
+    #   FLARE_PG_DSN=postgresql://user:pass@localhost:5432/mydb
+    pg_dsn: str = "postgresql://postgres:postgres@localhost:5432/flare"
 
     # ── Storage limits ───────────────────────────────────────────────────────
     max_entries: int = 10_000
@@ -48,15 +34,23 @@ class FlareConfig(BaseSettings):
     dashboard_path: str = "/flare"
     dashboard_title: str = "Flare — Error Logs"
     dashboard_auth_dependency: Optional[Any] = Field(default=None, exclude=True)
-    # ── Storage backend ───────────────────────────────────────────────────────
-    # "redis"  (default) — Redis Streams. Requires a running Redis instance.
-    # "sqlite"            — Local SQLite file. Requires: pip install 'fastapi-flare[sqlite]'
+    # ── Storage backend ──────────────────────────────────────────
+    # "sqlite" (default)  — Zero-config local file. Great for development and
+    #                        quick testing. Requires aiosqlite.
+    # "postgresql"        — Production-grade. Requires asyncpg + a running
+    #                        PostgreSQL instance (set FLARE_PG_DSN).
     #
-    # Environment variable:
-    #   FLARE_STORAGE_BACKEND=sqlite
-    #   FLARE_SQLITE_PATH=/data/flare.db
-    storage_backend: Literal["redis", "sqlite"] = "redis"
+    # Environment variables:
+    #   FLARE_STORAGE_BACKEND=postgresql
+    #   FLARE_PG_DSN=postgresql://user:pass@localhost:5432/mydb
+    storage_backend: Literal["postgresql", "sqlite"] = "sqlite"
     sqlite_path: str = "flare.db"
+    # Name of the PostgreSQL table used to store logs.
+    # Change this per-project to share one database across multiple APIs:
+    #   FLARE_PG_TABLE_NAME=flare_logs_checkout
+    #   FLARE_PG_TABLE_NAME=flare_logs_auth
+    # Only alphanumeric characters and underscores are allowed.
+    pg_table_name: str = "flare_logs"
 
     # ── Metrics ──────────────────────────────────────────────────────────────
     # Maximum number of distinct endpoint keys held in the in-memory metrics

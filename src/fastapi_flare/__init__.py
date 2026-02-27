@@ -2,29 +2,37 @@
 fastapi-flare
 =============
 
-Plug-and-play error tracking and log visualization for FastAPI.
-Backed by Redis Streams — no database required.
+Plug-and-play error tracking and debugger/metrics dashboard for FastAPI.
+Zero-config by default (SQLite), PostgreSQL-ready for production.
 
-Minimal usage::
+Quick start — zero config, works immediately::
 
     from fastapi import FastAPI
     from fastapi_flare import setup
 
     app = FastAPI()
-    setup(app, redis_url="redis://localhost:6379")
+    setup(app)
+    # Dashboard at http://localhost:8000/flare
+    # Uses SQLite (flare.db) by default — no setup required.
 
-    # Dashboard available at http://localhost:8000/flare
-
-Full usage::
+SQLite (explicit / custom path)::
 
     from fastapi_flare import setup, FlareConfig
 
     setup(app, config=FlareConfig(
-        redis_url="redis://localhost:6379",
+        storage_backend="sqlite",
+        sqlite_path="/data/flare.db",
         dashboard_path="/errors",
         dashboard_title="My App — Errors",
         retention_hours=72,
         max_entries=5_000,
+    ))
+
+PostgreSQL (production)::
+
+    setup(app, config=FlareConfig(
+        storage_backend="postgresql",
+        pg_dsn="postgresql://user:pass@localhost:5432/mydb",
     ))
 
 Zitadel authentication (optional)::
@@ -32,7 +40,7 @@ Zitadel authentication (optional)::
     from fastapi_flare import setup, FlareConfig
 
     setup(app, config=FlareConfig(
-        redis_url="redis://localhost:6379",
+        pg_dsn="postgresql://...",
         zitadel_domain="auth.mycompany.com",
         zitadel_client_id="000000000000000001",
         zitadel_project_id="000000000000000002",
@@ -98,7 +106,6 @@ __version__ = "0.1.4"
 def setup(
     app: FastAPI,
     *,
-    redis_url: Optional[str] = None,
     config: Optional[FlareConfig] = None,
 ) -> FlareConfig:
     """
@@ -116,11 +123,11 @@ def setup(
       6. Include the dashboard + API router
       7. Wrap the app lifespan to start/stop the background worker
 
-    :param app:       The FastAPI application instance.
-    :param redis_url: Shorthand for ``FlareConfig(redis_url=...)``.
-                      Ignored if ``config`` is provided.
-    :param config:    Full ``FlareConfig`` instance for advanced configuration.
-    :returns:         The resolved ``FlareConfig`` (useful for introspection).
+    :param app:    The FastAPI application instance.
+    :param config: Full ``FlareConfig`` instance.  When omitted, config is
+                   read from environment variables (``FLARE_*`` prefix) or
+                   ``.env`` file.
+    :returns:      The resolved ``FlareConfig`` (useful for introspection).
 
     .. note::
         Zitadel auth is activated automatically when **all three** of
@@ -130,7 +137,7 @@ def setup(
         ``pip install 'fastapi-flare[auth]'``.
     """
     if config is None:
-        config = FlareConfig(redis_url=redis_url) if redis_url else FlareConfig()
+        config = FlareConfig()
 
     # ── Instantiate storage backend ────────────────────────────────────
     from fastapi_flare.storage import make_storage

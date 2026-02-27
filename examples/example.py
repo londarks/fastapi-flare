@@ -1,5 +1,5 @@
 """
-fastapi-flare — example app (backend: Redis ou SQLite).
+fastapi-flare — example app (backend: SQLite, zero-config).
 
 Para rodar::
 
@@ -17,13 +17,9 @@ Rotas disponíveis::
     DELETE /items/{item_id}        → 404 se não existe (WARNING)
     GET    /flare                  → dashboard de erros
     GET    /flare/metrics          → dashboard de métricas
-    GET    /flare/callback         → callback OAuth2 Zitadel (criado automaticamente)
     GET    /docs                   → Scalar API reference
 """
 import os
-
-from dotenv import load_dotenv
-load_dotenv()
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -32,43 +28,29 @@ from pydantic import BaseModel, Field
 from scalar_fastapi import Theme, get_scalar_api_reference
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi_flare import FlareConfig, setup
 
 app = FastAPI(title="fastapi-flare example", docs_url=None, redoc_url=None)
 
-# ── FlareConfig ───────────────────────────────────────────────────────────────────
-#
-# Fluxo ao abrir http://localhost:8001/flare no browser:
-#   1. Sem sessão → redireciona para /flare/auth/login
-#   2. /flare/auth/login → PKCE challenge → Zitadel
-#   3. Login → /flare/callback → sessão criada → /flare liberado ✅
-#
-# ⚠️  Registre no Zitadel como Redirect URI:
-#       http://localhost:8001/flare/callback
-#
-
 setup(app, config=FlareConfig(
-    # ── Redis ────────────────────────────────────────────────────────────────
-    storage_backend="redis",
-    redis_host=os.getenv("FLARE_REDIS_HOST", "localhost"),
-    redis_port=int(os.getenv("FLARE_REDIS_PORT", "6379")),
-    redis_password=os.getenv("FLARE_REDIS_PASSWORD"),
-    redis_db=int(os.getenv("FLARE_REDIS_DB", "0")),
-    stream_key="flare:logs",
-    queue_key="flare:queue",
+    # ── Storage — PostgreSQL ─────────────────────────────────────────────────
+    storage_backend="postgresql",
+    pg_dsn=os.getenv("FLARE_PG_DSN"),
     max_entries=10_000,
     retention_hours=168,
 
     # ── Dashboard ────────────────────────────────────────────────────────────
     dashboard_path="/flare",
     dashboard_title="Flare Dashboard",
-    dashboard_auth_dependency=None,
 
     # ── Zitadel — browser PKCE ───────────────────────────────────────────────
     zitadel_domain=os.getenv("FLARE_ZITADEL_DOMAIN"),
     zitadel_client_id=os.getenv("FLARE_ZITADEL_CLIENT_ID"),
     zitadel_project_id=os.getenv("FLARE_ZITADEL_PROJECT_ID"),
-    zitadel_redirect_uri=os.getenv("FLARE_ZITADEL_REDIRECT_URI", "http://localhost:8001/flare/callback"),
+    zitadel_redirect_uri=os.getenv("FLARE_ZITADEL_REDIRECT_URI", "http://localhost:8002/flare/callback"),
     zitadel_session_secret=os.getenv("FLARE_ZITADEL_SESSION_SECRET"),
 
     # ── Worker ───────────────────────────────────────────────────────────────

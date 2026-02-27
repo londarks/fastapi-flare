@@ -9,7 +9,7 @@ Rules:
   - The dashboard speaks only to ``FlareStorageProtocol``.
   - Exception handlers speak only to ``FlareStorageProtocol``.
   - The worker speaks only to ``FlareStorageProtocol``.
-  - No module outside the ``storage/`` package knows whether Redis,
+  - No module outside the ``storage/`` package knows whether PostgreSQL,
     SQLite, or any future backend is in use.
 
 Adding a new backend
@@ -43,8 +43,8 @@ class FlareStorageProtocol(Protocol):
         """
         Accept one log entry for durable storage.
 
-        For Redis: pushes to the in-memory List buffer (LPUSH).
-        For SQLite: writes directly to the database.
+        For PostgreSQL: direct INSERT into flare_logs.
+        For SQLite: direct INSERT into logs.
 
         Must NEVER raise — any failure is swallowed silently.
         """
@@ -54,10 +54,10 @@ class FlareStorageProtocol(Protocol):
 
     async def flush(self) -> None:
         """
-        Drain any pending in-flight entries and apply retention policies.
+        Apply retention policies and any backend-specific maintenance.
 
-        For Redis: RPOP batch from List → XADD to Stream → XTRIM.
-        For SQLite: DELETE rows older than ``retention_hours``.
+        For PostgreSQL: DELETE rows older than ``retention_hours`` + count-based cap.
+        For SQLite: DELETE rows older than ``retention_hours`` + count-based cap.
 
         Called every ``worker_interval_seconds`` by :class:`FlareWorker`.
         """
@@ -108,7 +108,7 @@ class FlareStorageProtocol(Protocol):
 
         ``ok`` is True when the backend responds correctly.
         ``error_msg`` is empty on success, or a short human-readable message.
-        ``queue_size`` is the number of entries currently buffered (0 for SQLite).
+        ``queue_size`` is always 0 for direct-write backends (PostgreSQL, SQLite).
         """
         ...
 
@@ -116,7 +116,7 @@ class FlareStorageProtocol(Protocol):
         """
         Permanently delete all stored log entries from this backend.
 
-        For Redis: DEL stream_key + DEL queue_key.
+        For PostgreSQL: DELETE FROM flare_logs.
         For SQLite: DELETE FROM logs + VACUUM.
 
         Returns:
@@ -129,7 +129,7 @@ class FlareStorageProtocol(Protocol):
         Return a dict of runtime stats for this storage backend.
 
         The dict is passed directly into ``FlareStorageOverview`` by the router.
-        Keys vary by backend — Redis returns stream/queue/memory data;
+        Keys vary by backend — PostgreSQL returns row count, pool size, PG version;
         SQLite returns file path, size, row count and WAL status.
         Always includes ``connected: bool`` and optionally ``error: str``.
         """
