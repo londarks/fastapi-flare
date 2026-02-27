@@ -14,6 +14,7 @@ Every worker_interval_seconds the worker:
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ class FlareWorker:
         self._config = config
         self._task: Optional[asyncio.Task] = None
         self._flush_cycles: int = 0
+        self._started_at: Optional[float] = None
 
     @property
     def is_running(self) -> bool:
@@ -35,6 +37,13 @@ class FlareWorker:
     def flush_cycles(self) -> int:
         """Total number of successful flush() iterations so far."""
         return self._flush_cycles
+
+    @property
+    def uptime_seconds(self) -> Optional[int]:
+        """Seconds elapsed since the worker was started, or None if not yet started."""
+        if self._started_at is None:
+            return None
+        return int(time.monotonic() - self._started_at)
 
     # ── Internals ────────────────────────────────────────────────────────────
 
@@ -62,6 +71,7 @@ class FlareWorker:
     def start(self) -> None:
         """Schedule the worker loop as a background asyncio Task."""
         if self._task is None or self._task.done():
+            self._started_at = time.monotonic()
             self._task = asyncio.ensure_future(self._loop())
 
     async def stop(self) -> None:

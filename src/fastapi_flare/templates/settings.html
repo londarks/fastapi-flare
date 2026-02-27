@@ -1,0 +1,592 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="sp">
+
+  <!-- ═══════ PAGE HEADER ═══════ -->
+  <div class="sp-header">
+    <div class="sp-header-left">
+      <h1 class="sp-title"><i class="fas fa-sliders"></i> Settings</h1>
+      <p class="sp-subtitle">Notification channels and alert preferences for fastapi-flare.</p>
+    </div>
+    <span class="sp-notice"><i class="fas fa-circle-info"></i> Changes apply after restart</span>
+  </div>
+
+  <!-- ═══════ BODY: sidebar + panel ═══════ -->
+  <div class="sp-body">
+
+    <!-- ── LEFT NAV ── -->
+    <nav class="sp-nav">
+      <p class="sp-nav-label">Channels</p>
+      <button class="sp-nav-item active" data-panel="slack"    onclick="switchPanel(this,'slack')">
+        <span class="sp-nav-icon slack-icon">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+            <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+          </svg>
+        </span>
+        <span class="sp-nav-info">
+          <span class="sp-nav-name">Slack</span>
+          <span class="sp-nav-sub">Incoming Webhook</span>
+        </span>
+        <span class="sp-nav-dot" id="dot-slack"></span>
+      </button>
+
+      <button class="sp-nav-item" data-panel="discord" onclick="switchPanel(this,'discord')">
+        <span class="sp-nav-icon discord-icon">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+            <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+          </svg>
+        </span>
+        <span class="sp-nav-info">
+          <span class="sp-nav-name">Discord</span>
+          <span class="sp-nav-sub">Channel webhook</span>
+        </span>
+        <span class="sp-nav-dot" id="dot-discord"></span>
+      </button>
+
+      <button class="sp-nav-item" data-panel="teams" onclick="switchPanel(this,'teams')">
+        <span class="sp-nav-icon teams-icon">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+            <path d="M20.625 8.578a3.117 3.117 0 0 0-3.117-3.117 3.116 3.116 0 0 0-2.191.904A5.06 5.06 0 0 0 12.533 3H7.78A5.066 5.066 0 0 0 2.719 8.063v4.562a5.064 5.064 0 0 0 3.5 4.813v1.406a.844.844 0 0 0 1.687 0V17.5a5.062 5.062 0 0 0 3.578-3.547h.844a3.124 3.124 0 0 0 3.125-3.125V9.219a3.117 3.117 0 0 0 5.172-2.64zM11.344 12.25a3.377 3.377 0 0 1-3.375 3.375 3.377 3.377 0 0 1-3.375-3.375V8.063a3.377 3.377 0 0 1 3.375-3.375 3.377 3.377 0 0 1 3.375 3.375v4.187zm3.125-1.422a1.437 1.437 0 0 1-1.437 1.437h-.578V8.063c0-.22-.016-.437-.047-.656a1.43 1.43 0 0 1 2.062 1.297v2.124zm3.718-1.297a1.437 1.437 0 0 1-2.031-1.312V8.063c0-.793.643-1.437 1.437-1.437.793 0 1.437.643 1.437 1.437a1.44 1.44 0 0 1-.843 1.468z"/>
+          </svg>
+        </span>
+        <span class="sp-nav-info">
+          <span class="sp-nav-name">Microsoft Teams</span>
+          <span class="sp-nav-sub">Adaptive Card</span>
+        </span>
+        <span class="sp-nav-dot" id="dot-teams"></span>
+      </button>
+
+      <button class="sp-nav-item" data-panel="webhook" onclick="switchPanel(this,'webhook')">
+        <span class="sp-nav-icon webhook-icon">
+          <i class="fas fa-plug" style="font-size:14px"></i>
+        </span>
+        <span class="sp-nav-info">
+          <span class="sp-nav-name">Generic Webhook</span>
+          <span class="sp-nav-sub">Raw JSON POST</span>
+        </span>
+        <span class="sp-nav-dot" id="dot-webhook"></span>
+      </button>
+
+      <p class="sp-nav-label" style="margin-top:20px">Global</p>
+      <button class="sp-nav-item" data-panel="prefs" onclick="switchPanel(this,'prefs')">
+        <span class="sp-nav-icon prefs-icon">
+          <i class="fas fa-bell" style="font-size:14px"></i>
+        </span>
+        <span class="sp-nav-info">
+          <span class="sp-nav-name">Alert Preferences</span>
+          <span class="sp-nav-sub">Level &amp; cooldown</span>
+        </span>
+      </button>
+    </nav>
+
+    <!-- ── RIGHT PANEL ── -->
+    <div class="sp-panel-area">
+
+      <!-- ─── SLACK ─── -->
+      <div class="sp-panel active" id="panel-slack">
+        <div class="sp-panel-header">
+          <div class="sp-panel-icon slack-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+              <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="sp-panel-title">Slack</h2>
+            <p class="sp-panel-desc">Send Block Kit alerts to a Slack channel via Incoming Webhooks.</p>
+          </div>
+          <div class="sp-panel-header-right">
+            <span class="badge-soon">Pending integration</span>
+            <label class="sp-toggle" title="Enable Slack notifications">
+              <input type="checkbox" id="slackEnabled" onchange="updateDot('slack',this.checked)">
+              <span class="sp-toggle-track"><span class="sp-toggle-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="sp-panel-body">
+          <div class="sp-field-row">
+            <div class="sp-field">
+              <label class="sp-label" for="slackWebhookUrl">
+                Webhook URL
+                <a href="https://api.slack.com/apps" target="_blank" rel="noopener" class="sp-link"><i class="fas fa-arrow-up-right-from-square"></i> Create one</a>
+              </label>
+              <div class="sp-input-wrap icon">
+                <i class="fas fa-link sp-input-icon"></i>
+                <input type="url" id="slackWebhookUrl" class="sp-input" placeholder="https://hooks.slack.com/services/T00/B00/xxxx" spellcheck="false" autocomplete="off"/>
+              </div>
+              <span class="sp-hint">Env: <code>FLARE_SLACK_WEBHOOK_URL</code></span>
+            </div>
+            <div class="sp-field sp-field-sm">
+              <label class="sp-label" for="slackChannel">Channel <span class="sp-opt">optional</span></label>
+              <div class="sp-input-wrap icon">
+                <i class="fas fa-hashtag sp-input-icon"></i>
+                <input type="text" id="slackChannel" class="sp-input" placeholder="#alerts" autocomplete="off"/>
+              </div>
+              <span class="sp-hint">Overrides the webhook app default.</span>
+            </div>
+          </div>
+
+          <div class="sp-divider"></div>
+          <p class="sp-section-label">Options</p>
+          <div class="sp-checks">
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Include stack trace</label>
+            <label class="sp-check"><input type="checkbox"/><span class="sp-check-box"></span>Mention <code>@channel</code> on ERROR</label>
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Show HTTP method &amp; status code</label>
+          </div>
+
+          <div class="sp-actions">
+            <button class="sp-btn-ghost" onclick="testChannel('slack')"><i class="fas fa-paper-plane"></i> Send test</button>
+            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── DISCORD ─── -->
+      <div class="sp-panel" id="panel-discord">
+        <div class="sp-panel-header">
+          <div class="sp-panel-icon discord-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="sp-panel-title">Discord</h2>
+            <p class="sp-panel-desc">Post rich embed messages to a Discord channel.</p>
+          </div>
+          <div class="sp-panel-header-right">
+            <span class="badge-soon">Pending integration</span>
+            <label class="sp-toggle"><input type="checkbox" id="discordEnabled" onchange="updateDot('discord',this.checked)"><span class="sp-toggle-track"><span class="sp-toggle-thumb"></span></span></label>
+          </div>
+        </div>
+        <div class="sp-panel-body">
+          <div class="sp-field">
+            <label class="sp-label" for="discordWebhookUrl">
+              Webhook URL
+              <a href="https://support.discord.com/hc/en-us/articles/228383668" target="_blank" rel="noopener" class="sp-link"><i class="fas fa-arrow-up-right-from-square"></i> How to create</a>
+            </label>
+            <div class="sp-input-wrap icon">
+              <i class="fas fa-link sp-input-icon"></i>
+              <input type="url" id="discordWebhookUrl" class="sp-input" placeholder="https://discord.com/api/webhooks/..." spellcheck="false" autocomplete="off"/>
+            </div>
+            <span class="sp-hint">Env: <code>FLARE_DISCORD_WEBHOOK_URL</code></span>
+          </div>
+          <div class="sp-divider"></div>
+          <p class="sp-section-label">Options</p>
+          <div class="sp-checks">
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Include stack trace in embed</label>
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Color embed by severity (red / amber)</label>
+          </div>
+          <div class="sp-actions">
+            <button class="sp-btn-ghost" onclick="testChannel('discord')"><i class="fas fa-paper-plane"></i> Send test</button>
+            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── TEAMS ─── -->
+      <div class="sp-panel" id="panel-teams">
+        <div class="sp-panel-header">
+          <div class="sp-panel-icon teams-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
+              <path d="M20.625 8.578a3.117 3.117 0 0 0-3.117-3.117 3.116 3.116 0 0 0-2.191.904A5.06 5.06 0 0 0 12.533 3H7.78A5.066 5.066 0 0 0 2.719 8.063v4.562a5.064 5.064 0 0 0 3.5 4.813v1.406a.844.844 0 0 0 1.687 0V17.5a5.062 5.062 0 0 0 3.578-3.547h.844a3.124 3.124 0 0 0 3.125-3.125V9.219a3.117 3.117 0 0 0 5.172-2.64zM11.344 12.25a3.377 3.377 0 0 1-3.375 3.375 3.377 3.377 0 0 1-3.375-3.375V8.063a3.377 3.377 0 0 1 3.375-3.375 3.377 3.377 0 0 1 3.375 3.375v4.187zm3.125-1.422a1.437 1.437 0 0 1-1.437 1.437h-.578V8.063c0-.22-.016-.437-.047-.656a1.43 1.43 0 0 1 2.062 1.297v2.124zm3.718-1.297a1.437 1.437 0 0 1-2.031-1.312V8.063c0-.793.643-1.437 1.437-1.437.793 0 1.437.643 1.437 1.437a1.44 1.44 0 0 1-.843 1.468z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="sp-panel-title">Microsoft Teams</h2>
+            <p class="sp-panel-desc">Send Adaptive Card alerts to a Teams channel via Incoming Webhooks.</p>
+          </div>
+          <div class="sp-panel-header-right">
+            <span class="badge-soon">Pending integration</span>
+            <label class="sp-toggle"><input type="checkbox" id="teamsEnabled" onchange="updateDot('teams',this.checked)"><span class="sp-toggle-track"><span class="sp-toggle-thumb"></span></span></label>
+          </div>
+        </div>
+        <div class="sp-panel-body">
+          <div class="sp-field">
+            <label class="sp-label" for="teamsWebhookUrl">
+              Incoming Webhook URL
+              <a href="https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook" target="_blank" rel="noopener" class="sp-link"><i class="fas fa-arrow-up-right-from-square"></i> Docs</a>
+            </label>
+            <div class="sp-input-wrap icon">
+              <i class="fas fa-link sp-input-icon"></i>
+              <input type="url" id="teamsWebhookUrl" class="sp-input" placeholder="https://xxx.webhook.office.com/webhookb2/..." spellcheck="false" autocomplete="off"/>
+            </div>
+            <span class="sp-hint">Env: <code>FLARE_TEAMS_WEBHOOK_URL</code></span>
+          </div>
+          <div class="sp-actions">
+            <button class="sp-btn-ghost" onclick="testChannel('teams')"><i class="fas fa-paper-plane"></i> Send test</button>
+            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── GENERIC WEBHOOK ─── -->
+      <div class="sp-panel" id="panel-webhook">
+        <div class="sp-panel-header">
+          <div class="sp-panel-icon webhook-icon"><i class="fas fa-plug" style="font-size:20px"></i></div>
+          <div>
+            <h2 class="sp-panel-title">Generic Webhook</h2>
+            <p class="sp-panel-desc">HTTP POST the raw log entry as JSON to any endpoint.</p>
+          </div>
+          <div class="sp-panel-header-right">
+            <span class="badge-soon">Pending integration</span>
+            <label class="sp-toggle"><input type="checkbox" id="webhookEnabled" onchange="updateDot('webhook',this.checked)"><span class="sp-toggle-track"><span class="sp-toggle-thumb"></span></span></label>
+          </div>
+        </div>
+        <div class="sp-panel-body">
+          <div class="sp-field">
+            <label class="sp-label" for="genericWebhookUrl">Target URL</label>
+            <div class="sp-input-wrap icon">
+              <i class="fas fa-link sp-input-icon"></i>
+              <input type="url" id="genericWebhookUrl" class="sp-input" placeholder="https://myservice.internal/hooks/errors" spellcheck="false" autocomplete="off"/>
+            </div>
+            <span class="sp-hint">Env: <code>FLARE_WEBHOOK_URL</code></span>
+          </div>
+          <div class="sp-field">
+            <label class="sp-label" for="genericWebhookHeaders">Custom Headers <span class="sp-opt">optional</span></label>
+            <textarea id="genericWebhookHeaders" class="sp-textarea" rows="3" placeholder='{"Authorization": "Bearer my-token", "X-Source": "flare"}' spellcheck="false"></textarea>
+            <span class="sp-hint">JSON object — use for API keys or auth tokens.</span>
+          </div>
+          <div class="sp-divider"></div>
+          <p class="sp-section-label">Options</p>
+          <div class="sp-checks">
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Include full stack trace in payload</label>
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Include request body snapshot</label>
+          </div>
+          <div class="sp-actions">
+            <button class="sp-btn-ghost" onclick="testChannel('webhook')"><i class="fas fa-paper-plane"></i> Send test</button>
+            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── ALERT PREFERENCES ─── -->
+      <div class="sp-panel" id="panel-prefs">
+        <div class="sp-panel-header">
+          <div class="sp-panel-icon prefs-icon"><i class="fas fa-bell" style="font-size:20px"></i></div>
+          <div>
+            <h2 class="sp-panel-title">Alert Preferences</h2>
+            <p class="sp-panel-desc">Global rules that apply to all notification channels.</p>
+          </div>
+        </div>
+        <div class="sp-panel-body">
+          <div class="sp-field-row">
+            <div class="sp-field">
+              <label class="sp-label" for="alertMinLevel">Minimum alert level</label>
+              <div class="sp-select-wrap">
+                <select id="alertMinLevel" class="sp-select">
+                  <option value="ERROR" selected>ERROR — 5xx &amp; exceptions only</option>
+                  <option value="WARNING">WARNING — include 4xx errors</option>
+                </select>
+                <i class="fas fa-chevron-down sp-select-arrow"></i>
+              </div>
+              <span class="sp-hint">Env: <code>FLARE_ALERT_MIN_LEVEL</code></span>
+            </div>
+            <div class="sp-field sp-field-sm">
+              <label class="sp-label" for="alertCooldown">Cooldown per fingerprint</label>
+              <div class="sp-input-wrap suffix">
+                <input type="number" id="alertCooldown" class="sp-input" value="300" min="0" step="30"/>
+                <span class="sp-input-suffix">s</span>
+              </div>
+              <span class="sp-hint">Env: <code>FLARE_ALERT_COOLDOWN_SECONDS</code></span>
+            </div>
+          </div>
+          <div class="sp-infobox">
+            <i class="fas fa-circle-info"></i>
+            <span>Set <strong>cooldown</strong> to <code>0</code> to forward every matching event. The default 300 s prevents alert fatigue when the same error repeats rapidly.</span>
+          </div>
+          <div class="sp-divider"></div>
+          <p class="sp-section-label">Capture options</p>
+          <div class="sp-checks">
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Attach request body snapshot to alerts</label>
+            <label class="sp-check"><input type="checkbox" checked/><span class="sp-check-box"></span>Include HTTP headers in alert payload</label>
+            <label class="sp-check"><input type="checkbox"/><span class="sp-check-box"></span>Send alerts for health-check endpoints</label>
+          </div>
+          <div class="sp-actions">
+            <button class="sp-btn-primary" disabled><i class="fas fa-floppy-disk"></i> Save preferences</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /sp-panel-area -->
+  </div><!-- /sp-body -->
+</div><!-- /sp -->
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* ════════════════════════════════════════════════════════
+   SETTINGS PAGE  (sp-*)
+════════════════════════════════════════════════════════ */
+.sp { display: flex; flex-direction: column; height: calc(100vh - 56px); overflow: hidden; }
+
+/* Header */
+.sp-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 22px 28px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+}
+.sp-title {
+  font-size: 20px; font-weight: 700; color: var(--white);
+  display: flex; align-items: center; gap: 10px; margin-bottom: 4px;
+}
+.sp-title i { color: var(--red); font-size: 18px; }
+.sp-subtitle { font-size: 12px; color: var(--gray); }
+.sp-notice {
+  font-size: 11px; padding: 5px 12px; border-radius: 99px; white-space: nowrap;
+  background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.25);
+  color: var(--amber); display: flex; align-items: center; gap: 6px;
+}
+
+/* Body: two panes */
+.sp-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* ── Left nav ── */
+.sp-nav {
+  width: 220px; flex-shrink: 0; border-right: 1px solid var(--border);
+  padding: 16px 10px; display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
+}
+.sp-nav-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--gray); padding: 0 10px; margin-bottom: 4px; margin-top: 6px;
+}
+.sp-nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 8px; border: none; cursor: pointer;
+  background: transparent; text-align: left; width: 100%;
+  transition: background .12s, border-color .12s;
+  color: var(--gray-light); border: 1px solid transparent;
+}
+.sp-nav-item:hover { background: var(--bg-hover); color: var(--white); }
+.sp-nav-item.active { background: var(--red-dim); border-color: rgba(220,38,38,.3); color: var(--white); }
+.sp-nav-item.active .sp-nav-name { color: var(--red-light); }
+
+.sp-nav-icon {
+  width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sp-nav-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.sp-nav-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-nav-sub  { font-size: 11px; color: var(--gray); margin-top: 1px; }
+.sp-nav-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--border-dim); transition: background .2s;
+}
+.sp-nav-dot.on { background: var(--green); box-shadow: 0 0 5px rgba(34,197,94,.5); }
+
+/* Icon colours */
+.slack-icon   { background: rgba(74,21,75,.3);   color: #e01e5a; border: 1px solid rgba(224,30,90,.25); }
+.discord-icon { background: rgba(88,101,242,.12); color: #7289da; border: 1px solid rgba(114,137,218,.25); }
+.teams-icon   { background: rgba(100,148,210,.1); color: #6264a7; border: 1px solid rgba(98,100,167,.25); }
+.webhook-icon { background: rgba(34,197,94,.07);  color: var(--green); border: 1px solid rgba(34,197,94,.2); }
+.prefs-icon   { background: rgba(245,158,11,.07); color: var(--amber); border: 1px solid rgba(245,158,11,.2); }
+
+/* ── Right panel area ── */
+.sp-panel-area { flex: 1; overflow-y: auto; padding: 28px 32px; }
+
+.sp-panel { display: none; max-width: 720px; }
+.sp-panel.active { display: block; animation: panelIn .15s ease; }
+@keyframes panelIn { from { opacity: 0; transform: translateX(6px); } to { opacity: 1; transform: none; } }
+
+/* Panel header */
+.sp-panel-header {
+  display: flex; align-items: center; gap: 16px;
+  padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; flex-wrap: wrap;
+}
+.sp-panel-icon {
+  width: 44px; height: 44px; border-radius: 11px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sp-panel-title { font-size: 17px; font-weight: 700; color: var(--white); margin-bottom: 4px; }
+.sp-panel-desc  { font-size: 12px; color: var(--gray-light); }
+.sp-panel-header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+
+/* Badge */
+.badge-soon {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+  padding: 3px 10px; border-radius: 99px;
+  background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.25); color: var(--amber);
+}
+
+/* Toggle switch */
+.sp-toggle { display: flex; align-items: center; cursor: pointer; }
+.sp-toggle input { display: none; }
+.sp-toggle-track {
+  width: 36px; height: 20px; border-radius: 99px;
+  background: #1f1f1f; border: 1px solid var(--border);
+  position: relative; transition: background .2s, border-color .2s;
+}
+.sp-toggle input:checked + .sp-toggle-track { background: var(--green); border-color: var(--green); }
+.sp-toggle-thumb {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: #555; top: 2px; left: 3px; transition: left .2s, background .2s;
+}
+.sp-toggle input:checked + .sp-toggle-track .sp-toggle-thumb { left: 19px; background: #fff; }
+
+/* Panel body */
+.sp-panel-body { display: flex; flex-direction: column; gap: 20px; }
+
+/* Fields */
+.sp-field-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.sp-field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+.sp-field-sm { flex: 0 0 160px; min-width: 120px; }
+
+.sp-label {
+  font-size: 12px; font-weight: 500; color: var(--gray-light);
+  display: flex; align-items: center; gap: 8px;
+}
+.sp-opt {
+  font-size: 10px; padding: 1px 6px; border-radius: 99px;
+  background: rgba(107,114,128,.1); color: var(--gray); border: 1px solid var(--border);
+}
+.sp-link {
+  margin-left: auto; font-size: 11px; color: var(--red-light); text-decoration: none;
+  display: flex; align-items: center; gap: 4px;
+}
+.sp-link:hover { color: var(--red); }
+.sp-link i { font-size: 9px; }
+
+.sp-input-wrap { position: relative; }
+.sp-input-wrap.icon .sp-input { padding-left: 32px; }
+.sp-input-wrap.suffix .sp-input { padding-right: 32px; }
+.sp-input-icon {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+  color: var(--gray); font-size: 11px; pointer-events: none;
+}
+.sp-input-suffix {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--gray); pointer-events: none;
+}
+.sp-input {
+  width: 100%; padding: 8px 12px;
+  background: #0c0c0c; border: 1px solid var(--border);
+  border-radius: 7px; color: var(--white); font-size: 13px;
+  font-family: var(--mono); outline: none; transition: border-color .12s, box-shadow .12s;
+}
+.sp-input:focus { border-color: rgba(220,38,38,.45); box-shadow: 0 0 0 3px var(--red-dim); }
+.sp-input::placeholder { color: #444; }
+
+.sp-textarea {
+  width: 100%; padding: 9px 12px; min-height: 70px; resize: vertical;
+  background: #0c0c0c; border: 1px solid var(--border);
+  border-radius: 7px; color: var(--white); font-size: 12px;
+  font-family: var(--mono); outline: none; transition: border-color .12s;
+}
+.sp-textarea:focus { border-color: rgba(220,38,38,.45); box-shadow: 0 0 0 3px var(--red-dim); }
+
+.sp-select-wrap { position: relative; }
+.sp-select {
+  width: 100%; padding: 8px 32px 8px 12px; appearance: none;
+  background: #0c0c0c; border: 1px solid var(--border);
+  border-radius: 7px; color: var(--white); font-size: 13px;
+  outline: none; cursor: pointer; transition: border-color .12s;
+}
+.sp-select:focus { border-color: rgba(220,38,38,.45); }
+.sp-select-arrow {
+  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  color: var(--gray); font-size: 10px; pointer-events: none;
+}
+
+.sp-hint { font-size: 11px; color: var(--gray); line-height: 1.5; }
+.sp-hint code {
+  font-family: var(--mono); font-size: 10px;
+  background: rgba(255,255,255,.04); padding: 1px 5px; border-radius: 3px;
+  color: #aaa; border: 1px solid var(--border);
+}
+
+.sp-section-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .8px; color: var(--gray); margin-bottom: -8px;
+}
+
+/* Checkboxes */
+.sp-checks { display: flex; flex-direction: column; gap: 10px; }
+.sp-check {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: var(--gray-light); cursor: pointer; user-select: none;
+}
+.sp-check input { display: none; }
+.sp-check-box {
+  width: 15px; height: 15px; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid var(--border-dim); background: #0e0e0e;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, border-color .12s; position: relative;
+}
+.sp-check input:checked + .sp-check-box { background: var(--red); border-color: var(--red); }
+.sp-check input:checked + .sp-check-box::after {
+  content: ''; display: block; width: 4px; height: 7px;
+  border: 1.5px solid #fff; border-top: none; border-left: none;
+  transform: rotate(45deg) translate(-1px,-1px);
+}
+.sp-check:hover .sp-check-box { border-color: var(--gray); }
+
+/* Infobox */
+.sp-infobox {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 12px 14px; border-radius: 8px;
+  background: rgba(34,197,94,.04); border: 1px solid rgba(34,197,94,.14);
+  font-size: 12px; color: var(--gray-light); line-height: 1.6;
+}
+.sp-infobox i { color: var(--green); margin-top: 1px; flex-shrink: 0; }
+.sp-infobox code {
+  font-family: var(--mono); font-size: 11px;
+  background: rgba(255,255,255,.04); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--border); color: #ccc;
+}
+.sp-infobox strong { color: var(--white); }
+
+/* Divider */
+.sp-divider { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+/* Actions */
+.sp-actions { display: flex; gap: 10px; justify-content: flex-end; padding-top: 4px; flex-wrap: wrap; }
+.sp-btn-primary, .sp-btn-ghost {
+  padding: 8px 16px; border-radius: 7px; font-size: 13px; font-weight: 500;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: all .12s;
+}
+.sp-btn-primary { background: var(--red); color: #fff; border: none; }
+.sp-btn-primary:hover:not(:disabled) { background: var(--red-light); transform: translateY(-1px); }
+.sp-btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.sp-btn-ghost { background: transparent; color: var(--gray-light); border: 1px solid var(--border); }
+.sp-btn-ghost:hover { color: var(--white); border-color: var(--border-dim); background: var(--bg-hover); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sp-body { flex-direction: column; }
+  .sp-nav { width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; flex-wrap: wrap; padding: 10px; overflow-x: auto; }
+  .sp-nav-label { display: none; }
+  .sp-nav-item { flex: 0 0 auto; }
+  .sp-nav-info .sp-nav-sub { display: none; }
+  .sp-panel-area { padding: 20px 16px; }
+}
+</style>
+
+<script>
+function switchPanel(btn, id) {
+  document.querySelectorAll('.sp-nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sp-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('panel-' + id).classList.add('active');
+}
+
+function updateDot(channel, enabled) {
+  var dot = document.getElementById('dot-' + channel);
+  if (dot) dot.classList.toggle('on', enabled);
+}
+
+function testChannel(type) {
+  var urlMap = {
+    slack:   document.getElementById('slackWebhookUrl'),
+    discord: document.getElementById('discordWebhookUrl'),
+    teams:   document.getElementById('teamsWebhookUrl'),
+    webhook: document.getElementById('genericWebhookUrl'),
+  };
+  var el = urlMap[type];
+  if (el && !el.value.trim()) {
+    showToast('Enter a webhook URL first', 'fas fa-triangle-exclamation');
+    return;
+  }
+  showToast('Test integration not active yet — URL saved locally.', 'fas fa-check-circle');
+}
+</script>
+{% endblock %}

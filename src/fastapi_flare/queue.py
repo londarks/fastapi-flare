@@ -7,9 +7,47 @@ If Redis is unavailable, log entries are silently discarded.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+# Numeric order for alert level comparison
+_LEVEL_ORDER: dict[str, int] = {"WARNING": 0, "ERROR": 1}
+
+
+def _fire_notifiers(config: Any, level: str, entry: dict) -> None:
+    """
+    Schedule alert notifications as background asyncio tasks if:
+      - at least one notifier is configured
+      - the entry level is >= config.alert_min_level
+      - the cooldown for this (event, endpoint) fingerprint has expired
+
+    Fire-and-forget: never blocks, never raises.
+    """
+    try:
+        notifiers = getattr(config, "alert_notifiers", None)
+        if not notifiers:
+            return
+
+        min_level = getattr(config, "alert_min_level", "ERROR")
+        if _LEVEL_ORDER.get(level, 0) < _LEVEL_ORDER.get(min_level, 1):
+            return
+
+        cooldown = getattr(config, "alert_cooldown_seconds", 300)
+        if cooldown > 0:
+            cache: dict = config.alert_cache_instance  # mutable dict on config
+            fingerprint = f"{entry.get('event', '')}:{entry.get('endpoint', '')}"
+            now = time.monotonic()
+            if now - cache.get(fingerprint, 0.0) < cooldown:
+                return  # still within cooldown window
+            cache[fingerprint] = now
+
+        for notifier in notifiers:
+            asyncio.ensure_future(notifier.send(entry))
+    except Exception:  # noqa: BLE001
+        pass
 
 # Module-level connection cache: { redis_url -> redis.asyncio.Redis | None }
 # None means a previous connection attempt failed; we don't retry on every request.
@@ -148,6 +186,9 @@ async def push_log(
         storage = config.storage_instance
         if storage is not None:
             await storage.enqueue(entry)
+
+        # ── Alert notifiers (fire-and-forget background tasks) ────────────
+        _fire_notifiers(config, level, entry)
 
     except Exception:
         pass  # Logging must never impact the user's request

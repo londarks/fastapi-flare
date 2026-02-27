@@ -102,7 +102,7 @@ _NEXT_USER_ID = 3
 _NEXT_ORDER_ID = 101
 
 VALID_COUPONS: set[str] = {"SAVE10", "FLARE20"}
-ADMIN_TOKEN = "secret-admin-token"
+ADMIN_TOKEN = os.getenv("EXAMPLE_ADMIN_TOKEN", "secret-admin-token")  # override via env in prod
 
 
 # ── Pydantic schemas ─────────────────────────────────────────────────────────────

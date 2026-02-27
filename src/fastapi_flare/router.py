@@ -43,10 +43,11 @@ def make_router(config) -> APIRouter:
     """Returns a configured APIRouter. Called once during setup()."""
     router = APIRouter(prefix=config.dashboard_path, include_in_schema=False)
 
-    _errors_path  = config.dashboard_path
-    _metrics_path = config.dashboard_path + "/metrics"
-    _storage_path = config.dashboard_path + "/storage"
-    _api_base     = config.dashboard_path + "/api"
+    _errors_path   = config.dashboard_path
+    _metrics_path  = config.dashboard_path + "/metrics"
+    _storage_path  = config.dashboard_path + "/storage"
+    _settings_path = config.dashboard_path + "/settings"
+    _api_base      = config.dashboard_path + "/api"
 
     # ── PUBLIC: Health Check (no auth required) ───────────────────────────
     @router.get("/health", response_model=FlareHealthReport, include_in_schema=True)
@@ -69,6 +70,7 @@ def make_router(config) -> APIRouter:
 
         worker_running  = worker.is_running  if worker  else False
         flush_cycles    = worker.flush_cycles if worker else 0
+        uptime_secs     = worker.uptime_seconds if worker else None
 
         if storage is None:
             return FlareHealthReport(
@@ -79,6 +81,7 @@ def make_router(config) -> APIRouter:
                 worker_running=worker_running,
                 worker_flush_cycles=flush_cycles,
                 queue_size=0,
+                uptime_seconds=uptime_secs,
             )
 
         storage_ok, storage_error, queue_size = await storage.health()
@@ -98,6 +101,7 @@ def make_router(config) -> APIRouter:
             worker_running=worker_running,
             worker_flush_cycles=flush_cycles,
             queue_size=queue_size,
+            uptime_seconds=uptime_secs,
         )
 
     # =========================================================================
@@ -118,19 +122,75 @@ def make_router(config) -> APIRouter:
         _login_path   = config.dashboard_path + "/auth/login"
 
         def _session_valid(request: Request) -> bool:
-            """True se a sessão contém um usuário autenticado e não expirado."""
+            """True se a sessão existe e ainda não expirou (verificação síncrona)."""
             if not request.session.get("authenticated"):
                 return False
             expires_str = request.session.get("expires_at")
             if expires_str:
                 if datetime.utcnow() > datetime.fromisoformat(expires_str):
-                    request.session.clear()
-                    return False
+                    return False  # não limpa aqui — deixa para _ensure_valid_session tentar refresh
+            return True
+
+        async def _try_refresh_session(request: Request) -> bool:
+            """
+            Tenta renovar a sessão usando o refresh_token armazenado.
+            Retorna True se a sessão foi renovada com sucesso, False caso contrário.
+            O refresh é tentado se:
+              - o token ainda está vivo mas falta ≤ 5 min para expirar, ou
+              - o token já expirou mas há um refresh_token na sessão.
+            """
+            from fastapi_flare.zitadel import refresh_zitadel_token as _refresh
+
+            refresh_tok = request.session.get("refresh_token")
+            if not refresh_tok:
+                return False
+
+            try:
+                result = await _refresh(
+                    domain=_domain,
+                    client_id=_client_id,
+                    refresh_token=refresh_tok,
+                )
+            except Exception:
+                request.session.clear()
+                return False
+
+            # Atualiza a sessão com os novos tokens
+            request.session["access_token"] = result["access_token"]
+            if result.get("refresh_token"):
+                request.session["refresh_token"] = result["refresh_token"]
+
+            expires_in = int(result.get("expires_in", 3600))
+            new_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+            request.session["expires_at"] = new_expiry.isoformat()
+            request.session["authenticated"] = True
+            return True
+
+        async def _ensure_valid_session(request: Request) -> bool:
+            """
+            Retorna True se a sessão é válida (imediatamente ou após refresh).
+            Limpa a sessão se não conseguir revalidar.
+            """
+            if not request.session.get("authenticated"):
+                return False
+
+            expires_str = request.session.get("expires_at")
+            if expires_str:
+                now = datetime.utcnow()
+                expiry = datetime.fromisoformat(expires_str)
+                # Tenta refresh se expirou ou se faltam ≤ 5 minutos
+                if now >= expiry - timedelta(minutes=5):
+                    refreshed = await _try_refresh_session(request)
+                    if not refreshed:
+                        request.session.clear()
+                        return False
+                    return True
+
             return True
 
         async def _require_session_api(request: Request) -> None:
             """Dependência para rotas /api — retorna 401 se sem sessão válida."""
-            if not _session_valid(request):
+            if not await _ensure_valid_session(request):
                 raise HTTPException(
                     status_code=401,
                     detail="Sessão expirada ou ausente. Recarregue o dashboard.",
@@ -145,12 +205,13 @@ def make_router(config) -> APIRouter:
 
         def _base_ctx(active: str, request: Request) -> dict:
             return {
-                "title":        config.dashboard_title,
-                "api_base":     _api_base,
-                "errors_path":  _errors_path,
-                "metrics_path": _metrics_path,
-                "storage_path": _storage_path,
-                "active_tab":   active,
+                "title":         config.dashboard_title,
+                "api_base":      _api_base,
+                "errors_path":   _errors_path,
+                "metrics_path":  _metrics_path,
+                "storage_path":  _storage_path,
+                "settings_path": _settings_path,
+                "active_tab":    active,
                 **_user_context(request),
             }
 
@@ -167,21 +228,27 @@ def make_router(config) -> APIRouter:
 
         @router.get("")
         async def dashboard(request: Request):
-            if not _session_valid(request):
+            if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_errors_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="errors.html",  context=_base_ctx("errors",  request))
 
         @router.get("/metrics")
         async def metrics_dashboard(request: Request):
-            if not _session_valid(request):
+            if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_metrics_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="metrics.html", context=_base_ctx("metrics", request))
 
         @router.get("/storage")
         async def storage_dashboard_auth(request: Request):
-            if not _session_valid(request):
+            if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_storage_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="storage.html", context=_base_ctx("storage", request))
+
+        @router.get("/settings")
+        async def settings_dashboard_auth(request: Request):
+            if not await _ensure_valid_session(request):
+                return RedirectResponse(url=f"{_login_path}?return_to={_settings_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="settings.html", context=_base_ctx("settings", request))
 
         # -- Auth: Login — inicia fluxo PKCE ----------------------------------
 
@@ -211,7 +278,7 @@ def make_router(config) -> APIRouter:
                 "client_id":             _client_id,
                 "redirect_uri":          _redirect_uri,
                 "response_type":         "code",
-                "scope":                 "openid profile email",
+                "scope":                 "openid profile email offline_access",
                 "state":                 state,
                 "code_challenge":        challenge,
                 "code_challenge_method": "S256",
@@ -247,12 +314,13 @@ def make_router(config) -> APIRouter:
         api_deps = deps
 
         _admin_ctx_base = {
-            "api_base":     _api_base,
-            "errors_path":  _errors_path,
-            "metrics_path": _metrics_path,
-            "storage_path": _storage_path,
-            "current_user": {"name": "Admin", "email": "", "picture": ""},
-            "logout_path":  None,
+            "api_base":      _api_base,
+            "errors_path":   _errors_path,
+            "metrics_path":  _metrics_path,
+            "storage_path":  _storage_path,
+            "settings_path": _settings_path,
+            "current_user":  {"name": "Admin", "email": "", "picture": ""},
+            "logout_path":   None,
         }
 
         def _admin_ctx(active: str) -> dict:
@@ -269,6 +337,10 @@ def make_router(config) -> APIRouter:
         @router.get("/storage", dependencies=deps)
         async def storage_dashboard(request: Request):
             return _templates.TemplateResponse(request=request, name="storage.html", context=_admin_ctx("storage"))
+
+        @router.get("/settings", dependencies=deps)
+        async def settings_dashboard(request: Request):
+            return _templates.TemplateResponse(request=request, name="settings.html", context=_admin_ctx("settings"))
 
     # =========================================================================
     # ROTAS /api — compartilhadas por ambos os modos
@@ -417,13 +489,16 @@ def make_callback_router(config) -> APIRouter:
         verifier  = pkce_data["v"]
         return_to = pkce_data.get("r", _errors_path)
 
-        access_token = await exchange_zitadel_code(
+        token_payload = await exchange_zitadel_code(
             domain=_domain,
             client_id=_client_id,
             redirect_uri=_redirect_uri,
             code=code,
             code_verifier=verifier,
         )
+        access_token  = token_payload["access_token"]
+        refresh_token = token_payload.get("refresh_token")
+        expires_in    = int(token_payload.get("expires_in", 3600))
 
         try:
             import httpx as _httpx
@@ -439,6 +514,8 @@ def make_callback_router(config) -> APIRouter:
 
         request.session["authenticated"] = True
         request.session["access_token"]  = access_token
+        if refresh_token:
+            request.session["refresh_token"] = refresh_token
         request.session["user"] = {
             "sub":            userinfo.get("sub", ""),
             "email":          userinfo.get("email", ""),
@@ -448,7 +525,7 @@ def make_callback_router(config) -> APIRouter:
             "picture":        userinfo.get("picture", ""),
             "email_verified": userinfo.get("email_verified", False),
         }
-        expires_at = datetime.utcnow() + timedelta(hours=1)
+        expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
         request.session["expires_at"] = expires_at.isoformat()
 
         response = RedirectResponse(url=return_to, status_code=302)

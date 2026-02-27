@@ -60,6 +60,7 @@ from fastapi.exceptions import HTTPException
 
 from fastapi_flare.config import FlareConfig
 from fastapi_flare.metrics import FlareMetrics
+from fastapi_flare.notifiers import DiscordNotifier, SlackNotifier, TeamsNotifier, WebhookNotifier
 from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareMetricsSnapshot, FlareStats
 from fastapi_flare.zitadel import (
     ZitadelBrowserRedirect,
@@ -78,6 +79,11 @@ __all__ = [
     "FlareLogPage",
     "FlareStats",
     "FlareMetricsSnapshot",
+    # Webhook notifiers
+    "WebhookNotifier",
+    "SlackNotifier",
+    "DiscordNotifier",
+    "TeamsNotifier",
     # Zitadel auth helpers
     "make_zitadel_dependency",
     "make_zitadel_browser_dependency",

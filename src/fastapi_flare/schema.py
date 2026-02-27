@@ -118,3 +118,4 @@ class FlareHealthReport(BaseModel):
     worker_running: bool
     worker_flush_cycles: int
     queue_size: int
+    uptime_seconds: Optional[int] = None

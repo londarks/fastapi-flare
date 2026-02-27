@@ -413,7 +413,7 @@ async def exchange_zitadel_code(
     redirect_uri: str,
     code: str,
     code_verifier: str,
-) -> str:
+) -> Dict[str, Any]:
     """
     Exchanges an OAuth2 authorization code for a Zitadel access token.
 
@@ -428,7 +428,8 @@ async def exchange_zitadel_code(
         code_verifier: PKCE verifier stored in the short-lived cookie.
 
     Returns:
-        Raw JWT access_token string.
+        Full token response dict (contains ``access_token``, and optionally
+        ``refresh_token``, ``expires_in``, ``id_token``, etc.).
 
     Raises:
         HTTPException 502: If the token exchange request fails.
@@ -467,7 +468,7 @@ async def exchange_zitadel_code(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Zitadel não retornou access_token na resposta do token endpoint",
         )
-    return access_token
+    return payload  # dict contendo access_token, e opcionalmente refresh_token, expires_in
 
 
 # ============================================================================
@@ -488,3 +489,71 @@ def clear_jwks_cache(domain: Optional[str] = None) -> None:
         _jwks_cache.pop(domain, None)
     else:
         _jwks_cache.clear()
+
+
+async def refresh_zitadel_token(
+    domain: str,
+    client_id: str,
+    refresh_token: str,
+) -> Dict[str, Any]:
+    """
+    Uses a Zitadel refresh_token to obtain a new access_token (and possibly
+    a new refresh_token).
+
+    The ``offline_access`` scope must have been requested during the original
+    PKCE authorization to receive a refresh token.
+
+    Args:
+        domain:        Zitadel domain (e.g. ``auth.example.com``).
+        client_id:     OAuth2 Client ID.
+        refresh_token: The refresh token stored in the user session.
+
+    Returns:
+        Dict with at least ``access_token`` and optionally ``refresh_token``
+        and ``expires_in`` (integer seconds).
+
+    Raises:
+        HTTPException 502: If the token-refresh request fails or Zitadel
+                           returns an error (e.g. session revoked).
+        ImportError:       If ``httpx`` is not installed.
+    """
+    try:
+        import httpx
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "httpx is required for Zitadel authentication. "
+            "Install it with: pip install 'fastapi-flare[auth]'"
+        ) from exc
+
+    token_url = f"https://{domain}/oauth/v2/token"
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            response = await client.post(token_url, data=data)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Falha ao renovar token no Zitadel ({domain}): {exc}",
+            ) from exc
+
+    payload = response.json()
+    if "error" in payload:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Zitadel recusou o refresh_token: {payload.get('error_description', payload['error'])}",
+        )
+
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Zitadel não retornou access_token na resposta de refresh",
+        )
+
+    return payload

@@ -112,6 +112,31 @@ class FlareConfig(BaseSettings):
     #   FLARE_ZITADEL_SESSION_SECRET=<hex-string>
     zitadel_session_secret: Optional[str] = None
 
+    # ── Alerts / Notifiers ───────────────────────────────────────────────────
+    # List of notifier instances (SlackNotifier, DiscordNotifier, TeamsNotifier,
+    # WebhookNotifier, or any object with an async send(entry: dict) method).
+    # When non-empty, a background task fires each notifier whenever a log entry
+    # whose level is >= alert_min_level is captured.
+    #
+    # Example:
+    #   from fastapi_flare.notifiers import SlackNotifier
+    #   alert_notifiers=[SlackNotifier("https://hooks.slack.com/services/...")]
+    alert_notifiers: list[Any] = Field(default_factory=list, exclude=True)
+
+    # Minimum severity level that triggers a notification.
+    # "ERROR"   — only unhandled 5xx / exceptions (default, quieter)
+    # "WARNING" — also includes 4xx HTTP errors
+    alert_min_level: str = "ERROR"
+
+    # Minimum seconds between alerts for the same (event, endpoint) fingerprint.
+    # Prevents alert fatigue when the same error is repeating rapidly.
+    # Set to 0 to disable deduplication.
+    alert_cooldown_seconds: int = 300
+
+    # ── Runtime alert dedup cache (never from env) ────────────────────────────
+    # Dict[fingerprint_str, last_sent_timestamp] — populated at runtime only.
+    alert_cache_instance: dict = Field(default_factory=dict, exclude=True)
+
     # ── Worker ───────────────────────────────────────────────────────────────
     worker_interval_seconds: int = 5
     worker_batch_size: int = 100
