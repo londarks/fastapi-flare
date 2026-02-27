@@ -197,11 +197,21 @@ setup(app, config=FlareConfig(
     dashboard_title="My App — Errors",
     dashboard_auth_dependency=None,    # e.g. Depends(verify_token)
 
+    # ── Request tracking (HTTP Requests tab) ───────────────────────────
+    track_requests=True,           # enable the HTTP Requests tab (default: True)
+    track_2xx_requests=False,      # also record successful 2xx responses (default: False)
+    request_max_entries=1000,      # ring buffer size for tracked requests
+    capture_request_headers=False, # store request headers per entry (adds data volume)
+
     # ── Worker ────────────────────────────────────────────────────────
     worker_interval_seconds=5,
     worker_batch_size=100,
 ))
 ```
+
+> **Tip — showing all requests in the HTTP Requests tab:**  
+> By default only 4xx and 5xx are recorded. To also capture 200 OK and other successful
+> responses, set `track_2xx_requests=True` (or `FLARE_TRACK_2XX_REQUESTS=true`).
 
 ### Environment Variables
 
@@ -215,6 +225,12 @@ FLARE_RETENTION_HOURS=72
 FLARE_MAX_ENTRIES=5000
 FLARE_DASHBOARD_PATH=/errors
 FLARE_DASHBOARD_TITLE="Production Errors"
+
+# Request tracking
+FLARE_TRACK_REQUESTS=true
+FLARE_TRACK_2XX_REQUESTS=true   # record 200 OK and other successful responses
+FLARE_REQUEST_MAX_ENTRIES=1000
+FLARE_CAPTURE_REQUEST_HEADERS=false
 ```
 
 ---
