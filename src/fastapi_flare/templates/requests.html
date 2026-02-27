@@ -1,0 +1,310 @@
+{% extends "layout.html" %}
+
+{% block header_right %}
+<label class="refresh-toggle" title="Auto-refresh every 30s">
+  <div class="live-dot off" id="liveDot"></div>
+  <span id="refreshLabel">Auto-refresh</span>
+  <label class="toggle-switch">
+    <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh(this.checked)">
+    <span class="toggle-slider"></span>
+  </label>
+</label>
+{% endblock %}
+
+{% block content %}
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="stat-card">
+      <span class="stat-label">Stored</span>
+      <span class="stat-value" id="statTotal">—</span>
+      <span class="stat-sub" id="statRingBuf">ring buffer</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Requests (1h)</span>
+      <span class="stat-value" id="statReqLastHour">—</span>
+      <span class="stat-sub">last hour</span>
+    </div>
+    <div class="stat-card red">
+      <span class="stat-label">Errors (1h)</span>
+      <span class="stat-value red" id="statErrLastHour">—</span>
+      <span class="stat-sub">4xx / 5xx last hour</span>
+    </div>
+    <div class="stat-card amber">
+      <span class="stat-label">Avg duration</span>
+      <span class="stat-value amber" id="statAvgDuration">—</span>
+      <span class="stat-sub" id="statSlowest"></span>
+    </div>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="filters">
+    <div class="filter-group">
+      <i class="fas fa-search" style="color:var(--gray);font-size:12px"></i>
+      <input type="text" class="search-input" id="pathFilter" placeholder="Filter by path…" oninput="debounceLoad()" style="width:200px" />
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Method</span>
+      <div class="level-chips">
+        <button class="chip active" data-method="" onclick="setMethodChip(this)">All</button>
+        <button class="chip" data-method="GET"    onclick="setMethodChip(this)">GET</button>
+        <button class="chip" data-method="POST"   onclick="setMethodChip(this)">POST</button>
+        <button class="chip" data-method="PUT"    onclick="setMethodChip(this)">PUT</button>
+        <button class="chip" data-method="PATCH"  onclick="setMethodChip(this)">PATCH</button>
+        <button class="chip" data-method="DELETE" onclick="setMethodChip(this)">DELETE</button>
+      </div>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Status</span>
+      <input type="number" id="statusFilter" placeholder="e.g. 404" style="width:90px" oninput="debounceLoad()" />
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Min ms</span>
+      <input type="number" id="minDurationFilter" placeholder="e.g. 500" style="width:90px" oninput="debounceLoad()" />
+    </div>
+    <div class="filters-right">
+      <button class="btn btn-ghost" onclick="clearFilters()"><i class="fas fa-xmark"></i> Clear</button>
+      <button class="btn btn-red" onclick="loadRequests(1)"><i class="fas fa-rotate-right"></i> Refresh</button>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-wrapper">
+    <div class="table-header">
+      <span class="table-title">
+        <i class="fas fa-arrow-right-arrow-left" style="color:var(--red)"></i>
+        HTTP Requests
+      </span>
+      <span class="table-count" id="tableCount">—</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:155px">Timestamp</th>
+            <th style="width:80px">Method</th>
+            <th>Path</th>
+            <th style="width:90px">Status</th>
+            <th style="width:90px">Duration</th>
+            <th style="width:80px">Details</th>
+          </tr>
+        </thead>
+        <tbody id="logsBody">
+          <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- PAGINATION -->
+  <div class="pagination" id="pagination"></div>
+
+  <!-- DETAIL MODAL -->
+  <div class="modal-overlay" id="detailModal" onclick="closeModal(event)">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span id="modalTitle">Request detail</span>
+        <button class="modal-close" onclick="document.getElementById('detailModal').classList.remove('open')">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+var API_BASE = "{{ api_base }}";
+var currentPage = 1;
+var autoTimer = null;
+var debounceTimer = null;
+var selectedMethod = "";
+
+/* ── Helpers ────────────────────────────────────────────────────────── */
+function fmtTs(iso) {
+  if (!iso) return "—";
+  var d = new Date(iso);
+  return d.toLocaleDateString() + " " + d.toLocaleTimeString();
+}
+
+function methodBadge(m) {
+  var colors = { GET:"#22c55e", POST:"#3b82f6", PUT:"#f59e0b", PATCH:"#a855f7", DELETE:"#dc2626" };
+  var c = colors[m] || "#6b7280";
+  return '<span style="font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44">' + (m||"—") + '</span>';
+}
+
+function statusBadge(s) {
+  if (!s) return "—";
+  var c = s >= 500 ? "var(--red)" : s >= 400 ? "var(--amber)" : s >= 300 ? "#60a5fa" : "var(--green)";
+  return '<span style="font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 6px;border-radius:4px;background:' + c + '22;color:' + c + '">' + s + '</span>';
+}
+
+function durationBadge(ms) {
+  if (ms == null) return "—";
+  var c = ms > 1000 ? "var(--red)" : ms > 300 ? "var(--amber)" : "var(--green)";
+  return '<span style="font-family:var(--mono);font-size:12px;color:' + c + '">' + ms + ' ms</span>';
+}
+
+/* ── Stats ────────────────────────────────────────────────────────── */
+function loadStats() {
+  fetch(API_BASE + "/request-stats")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById("statTotal").textContent = d.total_stored ?? "—";
+      var cap = d.ring_buffer_size ? d.ring_buffer_size : "?";
+      var pct = d.ring_buffer_size ? Math.round((d.total_stored / d.ring_buffer_size) * 100) : 0;
+      document.getElementById("statRingBuf").textContent = "of " + cap + " (" + pct + "% full)";
+      document.getElementById("statReqLastHour").textContent = d.requests_last_hour ?? "—";
+      document.getElementById("statErrLastHour").textContent = d.errors_last_hour ?? "—";
+      document.getElementById("statAvgDuration").textContent = d.avg_duration_ms != null ? d.avg_duration_ms + " ms" : "—";
+      if (d.slowest_endpoint) {
+        document.getElementById("statSlowest").textContent =
+          "slowest: " + d.slowest_endpoint.substring(0, 24) + (d.slowest_endpoint.length > 24 ? "…" : "");
+      }
+    })
+    .catch(function() {});
+}
+
+/* ── Requests table ─────────────────────────────────────────────── */
+function loadRequests(page) {
+  currentPage = page || 1;
+  var path   = document.getElementById("pathFilter").value;
+  var status = document.getElementById("statusFilter").value;
+  var minMs  = document.getElementById("minDurationFilter").value;
+  var q = "?page=" + currentPage + "&limit=50";
+  if (selectedMethod) q += "&method=" + encodeURIComponent(selectedMethod);
+  if (status)  q += "&status_code=" + encodeURIComponent(status);
+  if (path)    q += "&path=" + encodeURIComponent(path);
+  if (minMs)   q += "&min_duration_ms=" + encodeURIComponent(minMs);
+
+  fetch(API_BASE + "/requests" + q)
+    .then(function(r) { return r.json(); })
+    .then(function(data) { renderTable(data); renderPagination(data); })
+    .catch(function() {
+      document.getElementById("logsBody").innerHTML =
+        '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--red)">Failed to load requests</td></tr>';
+    });
+}
+
+function renderTable(data) {
+  var tbody = document.getElementById("logsBody");
+  var count = document.getElementById("tableCount");
+  count.textContent = data.total ? data.total.toLocaleString() + " total" : "0 total";
+  if (!data.requests || data.requests.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">No requests found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.requests.map(function(r) {
+    var errorIcon = r.error_id
+      ? ' <a href="{{ errors_path }}" title="Linked error: ' + r.error_id + '" style="color:var(--red);margin-left:4px"><i class="fas fa-link"></i></a>'
+      : "";
+    return '<tr onclick="openDetail(' + JSON.stringify(JSON.stringify(r)).replace(/</g,"\\u003c") + ')" style="cursor:pointer">' +
+      '<td style="font-family:var(--mono);font-size:12px;color:var(--gray-light)">' + fmtTs(r.timestamp) + '</td>' +
+      '<td>' + methodBadge(r.method) + '</td>' +
+      '<td style="font-family:var(--mono);font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.path||"") + '">' + (r.path||"—") + errorIcon + '</td>' +
+      '<td>' + statusBadge(r.status_code) + '</td>' +
+      '<td>' + durationBadge(r.duration_ms) + '</td>' +
+      '<td><button class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="event.stopPropagation();openDetail(' + JSON.stringify(JSON.stringify(r)).replace(/</g,"\\u003c") + ')"><i class="fas fa-eye"></i></button></td>' +
+      '</tr>';
+  }).join("");
+}
+
+function renderPagination(data) {
+  var el = document.getElementById("pagination");
+  if (!data.pages || data.pages <= 1) { el.innerHTML = ""; return; }
+  var html = "";
+  if (data.page > 1)          html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page-1) + ')"><i class="fas fa-chevron-left"></i></button>';
+  html += '<span style="padding:0 12px;color:var(--gray-light)">Page ' + data.page + ' / ' + data.pages + '</span>';
+  if (data.page < data.pages) html += '<button class="btn btn-ghost" onclick="loadRequests(' + (data.page+1) + ')"><i class="fas fa-chevron-right"></i></button>';
+  el.innerHTML = html;
+}
+
+/* ── Detail modal ───────────────────────────────────────────────── */
+function openDetail(jsonStr) {
+  var r = JSON.parse(jsonStr);
+  document.getElementById("modalTitle").textContent = r.method + " " + (r.path || "—") + " → " + (r.status_code || "?");
+  var rows = [
+    ["Timestamp",  fmtTs(r.timestamp)],
+    ["Request ID", r.request_id ? '<span style="font-family:var(--mono);font-size:12px;color:var(--gray-light)">' + r.request_id + '</span>' : "—"],
+    ["IP Address", r.ip_address || "—"],
+    ["User Agent", r.user_agent ? '<span style="font-size:12px;color:var(--gray-light)">' + r.user_agent + '</span>' : "—"],
+    ["Duration",   durationBadge(r.duration_ms)],
+    ["Linked Error", r.error_id ? '<a href="{{ errors_path }}" style="color:var(--red)"><i class="fas fa-link"></i> ' + r.error_id + '</a>' : "none"],
+  ];
+  var html = '<table style="width:100%;border-collapse:collapse">';
+  rows.forEach(function(row) {
+    html += '<tr><td style="padding:7px 10px;width:130px;color:var(--gray);white-space:nowrap;vertical-align:top">' + row[0] + '</td>' +
+            '<td style="padding:7px 10px">' + row[1] + '</td></tr>';
+  });
+  html += '</table>';
+
+  if (r.request_headers && Object.keys(r.request_headers).length > 0) {
+    html += '<div style="margin:12px 0 4px;padding:0 10px;font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Request Headers</div>';
+    html += '<pre style="margin:0 8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--gray-light);overflow:auto;max-height:160px">' +
+            escapeHtml(JSON.stringify(r.request_headers, null, 2)) + '</pre>';
+  }
+
+  if (r.request_body != null) {
+    html += '<div style="margin:12px 0 4px;padding:0 10px;font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Request Body</div>';
+    html += '<pre style="margin:0 8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--gray-light);overflow:auto;max-height:200px">' +
+            escapeHtml(JSON.stringify(r.request_body, null, 2)) + '</pre>';
+  }
+
+  document.getElementById("modalBody").innerHTML = html;
+  document.getElementById("detailModal").classList.add("open");
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById("detailModal"))
+    document.getElementById("detailModal").classList.remove("open");
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/* ── Filters ───────────────────────────────────────────────────── */
+function setMethodChip(el) {
+  document.querySelectorAll(".chip[data-method]").forEach(function(c) { c.classList.remove("active"); });
+  el.classList.add("active");
+  selectedMethod = el.dataset.method;
+  loadRequests(1);
+}
+
+function clearFilters() {
+  document.getElementById("pathFilter").value = "";
+  document.getElementById("statusFilter").value = "";
+  document.getElementById("minDurationFilter").value = "";
+  selectedMethod = "";
+  document.querySelectorAll(".chip[data-method]").forEach(function(c) { c.classList.remove("active"); });
+  document.querySelector(".chip[data-method='']").classList.add("active");
+  loadRequests(1);
+}
+
+function debounceLoad() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(function() { loadRequests(1); }, 350);
+}
+
+/* ── Auto-refresh ──────────────────────────────────────────────── */
+function toggleAutoRefresh(on) {
+  var dot   = document.getElementById("liveDot");
+  var label = document.getElementById("refreshLabel");
+  clearInterval(autoTimer);
+  if (on) {
+    dot.classList.remove("off");
+    label.textContent = "Live";
+    autoTimer = setInterval(function() { loadStats(); loadRequests(currentPage); }, 30000);
+  } else {
+    dot.classList.add("off");
+    label.textContent = "Auto-refresh";
+  }
+}
+
+/* ── Init ──────────────────────────────────────────────────────── */
+loadStats();
+loadRequests(1);
+</script>
+{% endblock %}

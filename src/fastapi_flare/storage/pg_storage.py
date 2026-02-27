@@ -34,7 +34,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi_flare.schema import FlareLogEntry, FlareStats
+from fastapi_flare.schema import FlareLogEntry, FlareRequestEntry, FlareRequestStats, FlareStats
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
@@ -77,6 +77,33 @@ CREATE INDEX IF NOT EXISTS idx_{table}_level_ts   ON {table} (level, timestamp D
 """
 
 
+def _build_requests_ddl(table: str) -> str:
+    """Generate CREATE TABLE + indexes DDL for the HTTP requests ring-buffer table."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    id              BIGSERIAL    PRIMARY KEY,
+    timestamp       TIMESTAMPTZ  NOT NULL,
+    method          TEXT         NOT NULL,
+    path            TEXT         NOT NULL,
+    status_code     INTEGER      NOT NULL,
+    duration_ms     INTEGER,
+    request_id      TEXT,
+    ip_address      TEXT,
+    user_agent      TEXT,
+    request_headers JSONB,
+    request_body    JSONB,
+    error_id        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_{table}_timestamp   ON {table} (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_{table}_status_code ON {table} (status_code);
+CREATE INDEX IF NOT EXISTS idx_{table}_method      ON {table} (method);
+CREATE INDEX IF NOT EXISTS idx_{table}_path        ON {table} (path);
+CREATE INDEX IF NOT EXISTS idx_{table}_request_id  ON {table} (request_id);
+CREATE INDEX IF NOT EXISTS idx_{table}_status_ts   ON {table} (status_code, timestamp DESC);
+"""
+
+
 # ── Backend ───────────────────────────────────────────────────────────────────
 
 class PostgreSQLStorage:
@@ -104,6 +131,12 @@ class PostgreSQLStorage:
         """Resolved table name — safe: config-controlled, validated on startup."""
         return self._config.pg_table_name
 
+    @property
+    def _requests_table(self) -> str:
+        """Derived requests table name, e.g. ``flare_logs`` → ``flare_requests``."""
+        base = self._table
+        return base.replace("_logs", "_requests") if "_logs" in base else base + "_requests"
+
     # ── Lazy pool init ────────────────────────────────────────────────────────
 
     async def _ensure_pool(self) -> Any:
@@ -128,6 +161,7 @@ class PostgreSQLStorage:
 
         async with self._pool.acquire() as conn:
             await conn.execute(_build_ddl(self._table))
+            await conn.execute(_build_requests_ddl(self._requests_table))
 
         return self._pool
 
@@ -292,6 +326,183 @@ class PostgreSQLStorage:
                 pass
             self._pool = None
 
+    # ── Request tracking ──────────────────────────────────────────────────────
+
+    async def enqueue_request(self, entry_dict: dict) -> None:
+        """
+        INSERT one HTTP request entry and immediately enforce the ring-buffer cap
+        by deleting any rows beyond ``request_max_entries`` (oldest first).
+        Both operations run inside a single transaction.
+        """
+        if not self._config.track_requests:
+            return
+        try:
+            pool = await self._ensure_pool()
+
+            ts_raw = entry_dict.get("timestamp")
+            if isinstance(ts_raw, str):
+                try:
+                    ts = datetime.fromisoformat(ts_raw)
+                except ValueError:
+                    ts = datetime.now(tz=timezone.utc)
+            elif isinstance(ts_raw, datetime):
+                ts = ts_raw
+            else:
+                ts = datetime.now(tz=timezone.utc)
+
+            headers = entry_dict.get("request_headers")
+            body = entry_dict.get("request_body")
+            headers_val = json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else None
+            body_val = json.dumps(body, default=str) if isinstance(body, (dict, list)) else None
+
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {self._requests_table} (
+                            timestamp, method, path, status_code, duration_ms,
+                            request_id, ip_address, user_agent,
+                            request_headers, request_body, error_id
+                        ) VALUES (
+                            $1, $2, $3, $4, $5,
+                            $6, $7, $8,
+                            $9::jsonb, $10::jsonb, $11
+                        )
+                        """,
+                        ts,
+                        entry_dict.get("method", "GET"),
+                        entry_dict.get("path", "/"),
+                        entry_dict.get("status_code", 200),
+                        entry_dict.get("duration_ms"),
+                        entry_dict.get("request_id"),
+                        entry_dict.get("ip_address"),
+                        entry_dict.get("user_agent"),
+                        headers_val,
+                        body_val,
+                        entry_dict.get("error_id"),
+                    )
+                    # Ring-buffer enforcement: keep only the newest N rows
+                    await conn.execute(
+                        f"""
+                        DELETE FROM {self._requests_table}
+                        WHERE id NOT IN (
+                            SELECT id FROM {self._requests_table}
+                            ORDER BY timestamp DESC
+                            LIMIT $1
+                        )
+                        """,
+                        self._config.request_max_entries,
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def list_requests(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        method: Optional[str] = None,
+        status_code: Optional[int] = None,
+        path: Optional[str] = None,
+        min_duration_ms: Optional[int] = None,
+    ) -> tuple[list[FlareRequestEntry], int]:
+        """SELECT with optional filters, ordered newest-first, with pagination."""
+        try:
+            pool = await self._ensure_pool()
+        except Exception:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        idx = 1
+
+        if method:
+            clauses.append(f"method = ${idx}")
+            params.append(method.upper())
+            idx += 1
+        if status_code is not None:
+            clauses.append(f"status_code = ${idx}")
+            params.append(status_code)
+            idx += 1
+        if path:
+            clauses.append(f"path ILIKE ${idx}")
+            params.append(f"%{path}%")
+            idx += 1
+        if min_duration_ms is not None:
+            clauses.append(f"duration_ms >= ${idx}")
+            params.append(min_duration_ms)
+            idx += 1
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        offset = (page - 1) * limit
+
+        try:
+            async with pool.acquire() as conn:
+                total: int = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM {self._requests_table} {where}",
+                    *params,
+                ) or 0
+
+                rows = await conn.fetch(
+                    f"""
+                    SELECT * FROM {self._requests_table} {where}
+                    ORDER BY timestamp DESC
+                    LIMIT ${idx} OFFSET ${idx + 1}
+                    """,
+                    *params,
+                    limit,
+                    offset,
+                )
+
+            return [_row_to_request_entry(row) for row in rows], total
+        except Exception:
+            return [], 0
+
+    async def get_request_stats(self) -> FlareRequestStats:
+        """Return ring-buffer stats and aggregated metrics."""
+        try:
+            pool = await self._ensure_pool()
+        except Exception:
+            return _empty_request_stats(self._config.request_max_entries)
+
+        try:
+            cutoff_1h = datetime.now(tz=timezone.utc) - timedelta(hours=1)
+            rt = self._requests_table
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT
+                        COUNT(*)                                                                AS total_stored,
+                        COUNT(*) FILTER (WHERE timestamp > $1)                                 AS requests_last_hour,
+                        COUNT(*) FILTER (WHERE status_code >= 400 AND timestamp > $1)          AS errors_last_hour,
+                        AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL)::int           AS avg_duration_ms,
+                        MAX(duration_ms)                                                       AS slowest_duration_ms
+                    FROM {rt}
+                    """,
+                    cutoff_1h,
+                )
+                # Slowest endpoint
+                slowest_row = await conn.fetchrow(
+                    f"""
+                    SELECT path
+                    FROM {rt}
+                    WHERE duration_ms = (SELECT MAX(duration_ms) FROM {rt})
+                    LIMIT 1
+                    """
+                )
+
+            return FlareRequestStats(
+                total_stored=row["total_stored"] or 0,
+                ring_buffer_size=self._config.request_max_entries,
+                requests_last_hour=row["requests_last_hour"] or 0,
+                errors_last_hour=row["errors_last_hour"] or 0,
+                avg_duration_ms=row["avg_duration_ms"],
+                slowest_endpoint=slowest_row["path"] if slowest_row else None,
+                slowest_duration_ms=row["slowest_duration_ms"],
+            )
+        except Exception:
+            return _empty_request_stats(self._config.request_max_entries)
+
     # ── Read path ─────────────────────────────────────────────────────────────
 
     async def list_logs(
@@ -413,6 +624,47 @@ def _mask_dsn(dsn: str) -> str:
         return re.sub(r"(:)[^:@]+(@)", r"\1***\2", dsn)
     except Exception:
         return dsn
+
+
+def _empty_request_stats(ring_buffer_size: int) -> "FlareRequestStats":
+    return FlareRequestStats(
+        total_stored=0,
+        ring_buffer_size=ring_buffer_size,
+        requests_last_hour=0,
+        errors_last_hour=0,
+    )
+
+
+def _row_to_request_entry(row: Any) -> FlareRequestEntry:
+    """Convert an asyncpg ``Record`` from the requests table to a :class:`FlareRequestEntry`."""
+    headers = row["request_headers"]
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except Exception:
+            headers = None
+
+    body = row["request_body"]
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            pass
+
+    return FlareRequestEntry(
+        id=str(row["id"]),
+        timestamp=row["timestamp"],
+        method=row["method"],
+        path=row["path"],
+        status_code=row["status_code"],
+        duration_ms=row["duration_ms"],
+        request_id=row["request_id"],
+        ip_address=row["ip_address"],
+        user_agent=row["user_agent"],
+        request_headers=headers,
+        request_body=body,
+        error_id=row["error_id"],
+    )
 
 
 def _row_to_entry(row: Any) -> FlareLogEntry:

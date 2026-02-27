@@ -30,6 +30,8 @@ from fastapi_flare.schema import (
     FlareHealthReport,
     FlareLogPage,
     FlareMetricsSnapshot,
+    FlareRequestPage,
+    FlareRequestStats,
     FlareStats,
     FlareStorageActionResult,
     FlareStorageOverview,
@@ -47,6 +49,7 @@ def make_router(config) -> APIRouter:
     _metrics_path  = config.dashboard_path + "/metrics"
     _storage_path  = config.dashboard_path + "/storage"
     _settings_path = config.dashboard_path + "/settings"
+    _requests_path = config.dashboard_path + "/requests"
     _api_base      = config.dashboard_path + "/api"
 
     # ── PUBLIC: Health Check (no auth required) ───────────────────────────
@@ -211,6 +214,7 @@ def make_router(config) -> APIRouter:
                 "metrics_path":  _metrics_path,
                 "storage_path":  _storage_path,
                 "settings_path": _settings_path,
+                "requests_path": _requests_path,
                 "active_tab":    active,
                 **_user_context(request),
             }
@@ -249,6 +253,12 @@ def make_router(config) -> APIRouter:
             if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_settings_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="settings.html", context=_base_ctx("settings", request))
+
+        @router.get("/requests")
+        async def requests_dashboard_auth(request: Request):
+            if not await _ensure_valid_session(request):
+                return RedirectResponse(url=f"{_login_path}?return_to={_requests_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="requests.html", context=_base_ctx("requests", request))
 
         # -- Auth: Login — inicia fluxo PKCE ----------------------------------
 
@@ -319,6 +329,7 @@ def make_router(config) -> APIRouter:
             "metrics_path":  _metrics_path,
             "storage_path":  _storage_path,
             "settings_path": _settings_path,
+            "requests_path": _requests_path,
             "current_user":  {"name": "Admin", "email": "", "picture": ""},
             "logout_path":   None,
         }
@@ -341,6 +352,10 @@ def make_router(config) -> APIRouter:
         @router.get("/settings", dependencies=deps)
         async def settings_dashboard(request: Request):
             return _templates.TemplateResponse(request=request, name="settings.html", context=_admin_ctx("settings"))
+
+        @router.get("/requests", dependencies=deps)
+        async def requests_dashboard(request: Request):
+            return _templates.TemplateResponse(request=request, name="requests.html", context=_admin_ctx("requests"))
 
     # =========================================================================
     # ROTAS /api — compartilhadas por ambos os modos
@@ -372,6 +387,37 @@ def make_router(config) -> APIRouter:
                 warnings_last_24h=0, queue_length=0, stream_length=0,
             )
         return await storage.get_stats()
+
+    @router.get("/api/requests", dependencies=api_deps)
+    async def get_requests(
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=500),
+        method: Optional[str] = Query(None),
+        status_code: Optional[int] = Query(None),
+        path: Optional[str] = Query(None),
+        min_duration_ms: Optional[int] = Query(None),
+    ) -> FlareRequestPage:
+        storage = config.storage_instance
+        if storage is None:
+            return FlareRequestPage(requests=[], total=0, page=page, limit=limit, pages=0)
+        entries, total = await storage.list_requests(
+            page=page, limit=limit, method=method, status_code=status_code,
+            path=path, min_duration_ms=min_duration_ms,
+        )
+        pages = max(1, (total + limit - 1) // limit)
+        return FlareRequestPage(requests=entries, total=total, page=page, limit=limit, pages=pages)
+
+    @router.get("/api/request-stats", dependencies=api_deps)
+    async def get_request_stats() -> FlareRequestStats:
+        storage = config.storage_instance
+        if storage is None:
+            return FlareRequestStats(
+                total_stored=0,
+                ring_buffer_size=config.request_max_entries,
+                requests_last_hour=0,
+                errors_last_hour=0,
+            )
+        return await storage.get_request_stats()
 
     @router.get("/api/metrics", dependencies=api_deps)
     async def get_metrics() -> FlareMetricsSnapshot:

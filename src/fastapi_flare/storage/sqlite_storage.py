@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi_flare.schema import FlareLogEntry, FlareStats
+from fastapi_flare.schema import FlareLogEntry, FlareRequestEntry, FlareRequestStats, FlareStats
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
@@ -57,6 +57,31 @@ CREATE INDEX IF NOT EXISTS idx_logs_event       ON logs(event);
 CREATE INDEX IF NOT EXISTS idx_logs_http_status ON logs(http_status);
 -- Composite: covers level filter + time range in the same scan (used by get_stats)
 CREATE INDEX IF NOT EXISTS idx_logs_level_ts    ON logs(level, timestamp DESC);
+"""
+
+
+_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS requests (
+    id              INTEGER  PRIMARY KEY AUTOINCREMENT,
+    timestamp       DATETIME NOT NULL,
+    method          TEXT     NOT NULL,
+    path            TEXT     NOT NULL,
+    status_code     INTEGER  NOT NULL,
+    duration_ms     INTEGER,
+    request_id      TEXT,
+    ip_address      TEXT,
+    user_agent      TEXT,
+    request_headers TEXT,
+    request_body    TEXT,
+    error_id        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_requests_timestamp   ON requests(timestamp);
+CREATE INDEX IF NOT EXISTS idx_requests_status_code ON requests(status_code);
+CREATE INDEX IF NOT EXISTS idx_requests_method      ON requests(method);
+CREATE INDEX IF NOT EXISTS idx_requests_path        ON requests(path);
+CREATE INDEX IF NOT EXISTS idx_requests_request_id  ON requests(request_id);
+CREATE INDEX IF NOT EXISTS idx_requests_status_ts   ON requests(status_code, timestamp DESC);
 """
 
 
@@ -99,6 +124,7 @@ class SQLiteStorage:
         self._db.row_factory = aiosqlite.Row
 
         await self._db.executescript(_DDL)
+        await self._db.executescript(_REQUESTS_DDL)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.commit()
@@ -260,7 +286,173 @@ class SQLiteStorage:
             except Exception:
                 pass
             self._db = None
+    # ── Request tracking ───────────────────────────────────────────────
 
+    async def enqueue_request(self, entry_dict: dict) -> None:
+        """
+        INSERT one HTTP request entry and enforce the ring-buffer cap by
+        deleting rows beyond ``request_max_entries`` in the same transaction.
+        """
+        if not self._config.track_requests:
+            return
+        try:
+            db = await self._ensure_db()
+
+            ts_raw = entry_dict.get("timestamp")
+            if isinstance(ts_raw, datetime):
+                ts = ts_raw.isoformat()
+            elif isinstance(ts_raw, str):
+                ts = ts_raw
+            else:
+                ts = datetime.now(tz=timezone.utc).isoformat()
+
+            headers = entry_dict.get("request_headers")
+            body = entry_dict.get("request_body")
+
+            async with db.execute("BEGIN"):
+                await db.execute(
+                    """
+                    INSERT INTO requests (
+                        timestamp, method, path, status_code, duration_ms,
+                        request_id, ip_address, user_agent,
+                        request_headers, request_body, error_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ts,
+                        entry_dict.get("method", "GET"),
+                        entry_dict.get("path", "/"),
+                        entry_dict.get("status_code", 200),
+                        entry_dict.get("duration_ms"),
+                        entry_dict.get("request_id"),
+                        entry_dict.get("ip_address"),
+                        entry_dict.get("user_agent"),
+                        json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else headers,
+                        json.dumps(body, default=str) if isinstance(body, (dict, list)) else body,
+                        entry_dict.get("error_id"),
+                    ),
+                )
+                # Ring-buffer enforcement
+                await db.execute(
+                    """
+                    DELETE FROM requests
+                    WHERE id NOT IN (
+                        SELECT id FROM requests ORDER BY timestamp DESC LIMIT ?
+                    )
+                    """,
+                    (self._config.request_max_entries,),
+                )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def list_requests(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        method: Optional[str] = None,
+        status_code: Optional[int] = None,
+        path: Optional[str] = None,
+        min_duration_ms: Optional[int] = None,
+    ) -> tuple[list[FlareRequestEntry], int]:
+        """SELECT with optional filters, ordered newest-first, with pagination."""
+        try:
+            db = await self._ensure_db()
+        except Exception:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if method:
+            clauses.append("method = ?")
+            params.append(method.upper())
+        if status_code is not None:
+            clauses.append("status_code = ?")
+            params.append(status_code)
+        if path:
+            clauses.append("path LIKE ?")
+            params.append(f"%{path}%")
+        if min_duration_ms is not None:
+            clauses.append("duration_ms >= ?")
+            params.append(min_duration_ms)
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        try:
+            count_row = await db.execute_fetchall(
+                f"SELECT COUNT(*) AS cnt FROM requests {where}", params
+            )
+            total = count_row[0]["cnt"] if count_row else 0
+
+            offset = (page - 1) * limit
+            rows = await db.execute_fetchall(
+                f"""
+                SELECT * FROM requests {where}
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, limit, offset],
+            )
+            return [_row_to_request_entry(row) for row in rows], total
+        except Exception:
+            return [], 0
+
+    async def get_request_stats(self) -> FlareRequestStats:
+        """Return ring-buffer stats and aggregated metrics."""
+        try:
+            db = await self._ensure_db()
+        except Exception:
+            return FlareRequestStats(
+                total_stored=0,
+                ring_buffer_size=self._config.request_max_entries,
+                requests_last_hour=0,
+                errors_last_hour=0,
+            )
+
+        try:
+            cutoff_1h = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+            rows = await db.execute_fetchall(
+                """
+                SELECT
+                    COUNT(*) AS total_stored,
+                    SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END)                    AS requests_last_hour,
+                    SUM(CASE WHEN status_code >= 400 AND timestamp >= ? THEN 1 ELSE 0 END) AS errors_last_hour,
+                    AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END)         AS avg_duration_ms,
+                    MAX(duration_ms)                                                   AS slowest_duration_ms
+                FROM requests
+                """,
+                (cutoff_1h, cutoff_1h),
+            )
+            row = rows[0] if rows else None
+
+            slowest_rows = await db.execute_fetchall(
+                """
+                SELECT path FROM requests
+                WHERE duration_ms = (SELECT MAX(duration_ms) FROM requests)
+                LIMIT 1
+                """,
+            )
+            slowest_path = slowest_rows[0]["path"] if slowest_rows else None
+
+            avg = row["avg_duration_ms"] if row and row["avg_duration_ms"] is not None else None
+            return FlareRequestStats(
+                total_stored=row["total_stored"] or 0 if row else 0,
+                ring_buffer_size=self._config.request_max_entries,
+                requests_last_hour=row["requests_last_hour"] or 0 if row else 0,
+                errors_last_hour=row["errors_last_hour"] or 0 if row else 0,
+                avg_duration_ms=int(avg) if avg is not None else None,
+                slowest_endpoint=slowest_path,
+                slowest_duration_ms=row["slowest_duration_ms"] if row else None,
+            )
+        except Exception:
+            return FlareRequestStats(
+                total_stored=0,
+                ring_buffer_size=self._config.request_max_entries,
+                requests_last_hour=0,
+                errors_last_hour=0,
+            )
     # ── Read path ─────────────────────────────────────────────────────────
 
     async def list_logs(
@@ -389,6 +581,40 @@ def _parse_dt(value: str) -> Optional[datetime]:
         return dt
     except Exception:
         return None
+
+
+def _row_to_request_entry(row: Any) -> FlareRequestEntry:
+    headers = row["request_headers"] if "request_headers" in row.keys() else None
+    if headers and isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except Exception:
+            headers = None
+
+    body = row["request_body"] if "request_body" in row.keys() else None
+    if body and isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            pass
+
+    ts = _parse_dt(row["timestamp"]) or datetime.now(tz=timezone.utc)
+    error_id = row["error_id"] if "error_id" in row.keys() else None
+
+    return FlareRequestEntry(
+        id=str(row["id"]),
+        timestamp=ts,
+        method=row["method"],
+        path=row["path"],
+        status_code=row["status_code"],
+        duration_ms=row["duration_ms"],
+        request_id=row["request_id"],
+        ip_address=row["ip_address"],
+        user_agent=row["user_agent"],
+        request_headers=headers,
+        request_body=body,
+        error_id=error_id,
+    )
 
 
 def _row_to_entry(row: Any) -> FlareLogEntry:

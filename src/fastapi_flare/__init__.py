@@ -79,8 +79,11 @@ from fastapi_flare.zitadel import (
     verify_zitadel_token,
 )
 
+from fastapi_flare.integrations.sqlalchemy import setup_sqlalchemy
+
 __all__ = [
     "setup",
+    "setup_sqlalchemy",
     "FlareConfig",
     "FlareMetrics",
     "FlareLogEntry",
@@ -177,7 +180,7 @@ def setup(
         make_validation_exception_handler,
     )
     from fastapi.exceptions import RequestValidationError
-    from fastapi_flare.middleware import BodyCacheMiddleware, MetricsMiddleware, RequestIdMiddleware
+    from fastapi_flare.middleware import BodyCacheMiddleware, MetricsMiddleware, RequestIdMiddleware, RequestTrackingMiddleware
     from fastapi_flare.router import make_router, make_callback_router
     from fastapi_flare.worker import FlareWorker
 
@@ -194,6 +197,7 @@ def setup(
     #                           the cached bytes from there instead.
     app.add_middleware(BodyCacheMiddleware)
     app.add_middleware(MetricsMiddleware, config=config)
+    app.add_middleware(RequestTrackingMiddleware, config=config)
     app.add_middleware(RequestIdMiddleware)
 
     # SessionMiddleware — necessário para o fluxo PKCE browser.

@@ -69,6 +69,21 @@ class FlareConfig(BaseSettings):
     # Set to 0 to disable body capture entirely.
     max_request_body_bytes: int = 8192
 
+    # ── Request tracking (ring buffer) ────────────────────────────────────────
+    # Enables the /flare/requests dashboard tab.
+    # All 4xx/5xx are always stored. 2xx requests are opt-in via track_2xx_requests.
+    # Env: FLARE_TRACK_REQUESTS=true
+    track_requests: bool = True
+    # Ring buffer size — oldest entries are deleted when limit is exceeded.
+    # Env: FLARE_REQUEST_MAX_ENTRIES=1000
+    request_max_entries: int = 1000
+    # Also store 2xx (successful) requests. Off by default to keep volume low.
+    # Env: FLARE_TRACK_2XX_REQUESTS=true
+    track_2xx_requests: bool = False
+    # Store request headers per entry. Off by default (adds data volume).
+    # Env: FLARE_CAPTURE_REQUEST_HEADERS=true
+    capture_request_headers: bool = False
+
     # ── Runtime — set by setup(), never from env ────────────────────────────────
     # The resolved storage instance; injected after make_storage() in setup().
     # Excluded from serialization and env-loading.

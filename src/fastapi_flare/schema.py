@@ -108,6 +108,53 @@ class FlareStorageOverview(BaseModel):
     wal_active: Optional[bool] = None
 
 
+class FlareRequestEntry(BaseModel):
+    """
+    One captured HTTP request stored in the ring buffer.
+
+    Linked to ``FlareLogEntry`` via ``request_id`` — if the request caused
+    an error, the same ``request_id`` appears in ``flare_logs``.
+    """
+
+    id: str
+    timestamp: datetime
+    method: str
+    path: str
+    status_code: int
+    duration_ms: Optional[int] = None
+    request_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    request_headers: Optional[dict] = None
+    request_body: Optional[Any] = None
+    # linked error entry id (populated by the router when joining)
+    error_id: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FlareRequestPage(BaseModel):
+    """Paginated response for GET /flare/api/requests."""
+
+    requests: list[FlareRequestEntry]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
+class FlareRequestStats(BaseModel):
+    """Summary stats for the requests ring buffer."""
+
+    total_stored: int               # rows currently in the ring buffer
+    ring_buffer_size: int           # configured max
+    requests_last_hour: int
+    errors_last_hour: int           # 4xx + 5xx in the last hour
+    avg_duration_ms: Optional[int] = None
+    slowest_endpoint: Optional[str] = None
+    slowest_duration_ms: Optional[int] = None
+
+
 class FlareHealthReport(BaseModel):
     """Health report returned by GET /flare/health."""
 

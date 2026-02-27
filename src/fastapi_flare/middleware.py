@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -11,6 +12,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
+
+# ContextVar that carries the current request_id into SQLAlchemy event listeners
+# and any other async code running within the same async task.
+_flare_request_id_var: ContextVar[str | None] = ContextVar("flare_request_id", default=None)
 
 # Scope key where the raw request bytes are cached for exception handlers.
 # Exception handlers (HTTPException, RequestValidationError, unhandled 500) all
@@ -81,10 +86,13 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        request.state.request_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
         request.state.start_time = time.monotonic()
+        # Propagate request_id to the ContextVar so SQLAlchemy listeners can read it
+        _flare_request_id_var.set(request_id)
         response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
+        response.headers["X-Request-ID"] = request_id
         return response
 
 
@@ -127,4 +135,68 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 # scanner probing /items/1 … /items/99999 doesn't inflate the dict.
                 endpoint = "<unmatched>"
             await metrics.record(endpoint, duration_ms, response.status_code)
+        return response
+
+
+class RequestTrackingMiddleware(BaseHTTPMiddleware):
+    """
+    Captures metadata about every completed HTTP request and forwards it to
+    the storage backend via :meth:`~FlareStorageProtocol.enqueue_request`.
+
+    Behaviour:
+      - Always records 4xx and 5xx responses.
+      - Records 2xx only when ``config.track_2xx_requests`` is ``True``.
+      - Stores request headers only when ``config.capture_request_headers`` is ``True``.
+      - Skips all requests whose path starts with ``config.dashboard_path``
+        (internal dashboard traffic).
+      - Fully non-blocking: writes happen via ``asyncio.create_task`` so they
+        never delay the response.
+    """
+
+    def __init__(self, app, config: "FlareConfig") -> None:
+        super().__init__(app)
+        self._config = config
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        config = self._config
+
+        if not config.track_requests:
+            return response
+
+        # Skip internal dashboard routes
+        dashboard_path = getattr(config, "dashboard_path", "/flare")
+        if request.url.path.startswith(dashboard_path):
+            return response
+
+        status = response.status_code
+        # Filter by status: always capture 4xx/5xx; 2xx only if opted-in
+        if status < 400 and not (status >= 200 and config.track_2xx_requests):
+            return response
+
+        start = getattr(request.state, "start_time", None)
+        duration_ms = int((time.monotonic() - start) * 1000) if start is not None else None
+        request_id = getattr(request.state, "request_id", None)
+
+        entry: dict = {
+            "timestamp": __import__("datetime").datetime.now(
+                tz=__import__("datetime").timezone.utc
+            ),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": status,
+            "duration_ms": duration_ms,
+            "request_id": request_id,
+            "ip_address": getattr(request.client, "host", None),
+            "user_agent": request.headers.get("user-agent"),
+            "request_headers": dict(request.headers) if config.capture_request_headers else None,
+            "request_body": None,  # never capture response; request body is not re-read here
+            "error_id": None,
+        }
+
+        storage = getattr(config, "storage_instance", None)
+        if storage is not None:
+            import asyncio
+            asyncio.create_task(storage.enqueue_request(entry))
+
         return response

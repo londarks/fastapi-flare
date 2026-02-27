@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable
 
-from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareStats
+from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareRequestEntry, FlareRequestStats, FlareStats
 
 
 @runtime_checkable
@@ -133,4 +133,36 @@ class FlareStorageProtocol(Protocol):
         SQLite returns file path, size, row count and WAL status.
         Always includes ``connected: bool`` and optionally ``error: str``.
         """
+        ...
+
+    # ── Request ring buffer ───────────────────────────────────────────────
+
+    async def enqueue_request(self, entry_dict: dict) -> None:
+        """
+        Store one HTTP request entry in the ring buffer.
+
+        After INSERT, immediately deletes the oldest rows exceeding
+        ``request_max_entries`` so the table stays bounded.
+        Must NEVER raise — any failure is silently swallowed.
+        """
+        ...
+
+    async def list_requests(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        method: Optional[str] = None,
+        status_code: Optional[int] = None,
+        path: Optional[str] = None,
+        min_duration_ms: Optional[int] = None,
+    ) -> tuple[list[FlareRequestEntry], int]:
+        """
+        Return a paginated, optionally filtered list of request entries.
+        Ordered newest-first.
+        """
+        ...
+
+    async def get_request_stats(self) -> FlareRequestStats:
+        """Return summary stats for the requests ring buffer."""
         ...
