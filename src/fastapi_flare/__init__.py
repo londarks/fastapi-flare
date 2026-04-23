@@ -114,7 +114,7 @@ __all__ = [
     "clear_jwks_cache",
     "ZitadelBrowserRedirect",
 ]
-__version__ = "0.1.4"
+__version__ = "0.2.2"
 
 
 def setup(
