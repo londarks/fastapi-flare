@@ -12,12 +12,52 @@ Design goals
 - Simple aggregates per endpoint: count, errors, avg_latency, max_latency.
 - Readable snapshot exported as a list of plain dicts (no Pydantic here,
   to keep the aggregator independent of the schema layer).
+- **Mergeable** latency distribution: p95/p99 is stored as a fixed-bin
+  histogram so aggregates from multiple processes (uvicorn workers,
+  separate pods) can be combined by summing bucket counts.
 """
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass, field
+
+
+# Upper bounds (inclusive, in milliseconds) for the latency histogram.
+# Chosen to cover the full range a web request ever takes while keeping
+# a constant, predictable memory footprint (~17 ints per endpoint).
+# Resolution is denser where requests usually live (5ms–1s).
+#
+# Merging two histograms is simply ``a[i] + b[i]`` for every i, which is
+# what enables cross-worker aggregation without losing percentile fidelity.
+_LATENCY_BUCKETS_MS: tuple[int, ...] = (
+    1, 2, 5, 10, 20, 50, 100, 200, 500, 1000,
+    2000, 5000, 10000, 30000, 60000, 300000,
+)
+_LATENCY_OVERFLOW_MS: int = _LATENCY_BUCKETS_MS[-1] * 2  # sentinel for >max
+_BUCKET_COUNT: int = len(_LATENCY_BUCKETS_MS) + 1        # +1 for overflow
+
+
+def _percentile_from_counts(counts: list[int], total: int, p: float) -> int:
+    """
+    Compute the *p*-th percentile (0..100) from a bucketed count list.
+
+    Returns the upper bound of the bucket where the cumulative count first
+    crosses ``total * p / 100``. Accuracy is bounded by the bucket widths
+    above — for dashboard p95/p99 this is within ~2x, which is the standard
+    precision for Prometheus-style histograms.
+    """
+    if total <= 0:
+        return 0
+    target = total * p / 100.0
+    cumul = 0
+    for i, c in enumerate(counts):
+        cumul += c
+        if cumul >= target:
+            if i < len(_LATENCY_BUCKETS_MS):
+                return _LATENCY_BUCKETS_MS[i]
+            return _LATENCY_OVERFLOW_MS
+    return _LATENCY_OVERFLOW_MS
 
 
 @dataclass
@@ -26,9 +66,12 @@ class _EndpointStats:
     errors: int = 0
     total_ms: int = 0
     max_ms: int = 0
-    # Bounded ring buffer: last 1 000 samples are enough for stable P95.
-    # At 500 endpoints × 1 000 samples × 4 bytes ≈ 2 MB max.
-    _samples: deque = field(default_factory=lambda: deque(maxlen=1000))
+    # Fixed-bin latency histogram.  Each index corresponds to a bucket in
+    # ``_LATENCY_BUCKETS_MS`` (last slot is the overflow bucket).
+    # Size: ``_BUCKET_COUNT`` ints per endpoint — ~500 endpoints ≈ 8 KB.
+    _buckets: list[int] = field(
+        default_factory=lambda: [0] * _BUCKET_COUNT
+    )
 
     def record(self, duration_ms: int, status_code: int) -> None:
         self.count += 1
@@ -37,7 +80,13 @@ class _EndpointStats:
             self.max_ms = duration_ms
         if status_code >= 400:
             self.errors += 1
-        self._samples.append(duration_ms)
+        # Inlined bucket search — linear scan is faster than bisect for
+        # 16 elements on CPython (no call overhead) and keeps the code tiny.
+        for i, bound in enumerate(_LATENCY_BUCKETS_MS):
+            if duration_ms <= bound:
+                self._buckets[i] += 1
+                return
+        self._buckets[-1] += 1  # overflow
 
     @property
     def avg_ms(self) -> int:
@@ -45,16 +94,56 @@ class _EndpointStats:
 
     @property
     def p95_ms(self) -> int:
-        """95th-percentile latency over the last 1 000 samples."""
-        if not self._samples:
-            return 0
-        sorted_s = sorted(self._samples)
-        idx = max(0, int(len(sorted_s) * 0.95) - 1)
-        return sorted_s[idx]
+        """95th-percentile latency from the bucketed histogram."""
+        return _percentile_from_counts(self._buckets, self.count, 95.0)
+
+    @property
+    def p99_ms(self) -> int:
+        """99th-percentile latency from the bucketed histogram."""
+        return _percentile_from_counts(self._buckets, self.count, 99.0)
 
     @property
     def error_rate(self) -> float:
         return round(self.errors / self.count * 100, 1) if self.count else 0.0
+
+    # ── Serialisation (for cross-process persistence / merge) ─────────────
+
+    def to_dict(self) -> dict:
+        """Serialisable snapshot suitable for JSON persistence."""
+        return {
+            "count": self.count,
+            "errors": self.errors,
+            "total_ms": self.total_ms,
+            "max_ms": self.max_ms,
+            "buckets": list(self._buckets),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "_EndpointStats":
+        s = cls()
+        s.count = int(data.get("count", 0))
+        s.errors = int(data.get("errors", 0))
+        s.total_ms = int(data.get("total_ms", 0))
+        s.max_ms = int(data.get("max_ms", 0))
+        buckets = data.get("buckets") or []
+        if len(buckets) == _BUCKET_COUNT:
+            s._buckets = [int(x) for x in buckets]
+        return s
+
+    def merge(self, other: "_EndpointStats") -> None:
+        """Merge *other* into this stats object in place.
+
+        Counts, errors, and totals add; max takes the larger; histogram
+        buckets add element-wise — preserving percentile fidelity across
+        workers.
+        """
+        self.count += other.count
+        self.errors += other.errors
+        self.total_ms += other.total_ms
+        if other.max_ms > self.max_ms:
+            self.max_ms = other.max_ms
+        for i in range(_BUCKET_COUNT):
+            self._buckets[i] += other._buckets[i]
 
 
 class FlareMetrics:
@@ -137,3 +226,25 @@ class FlareMetrics:
     def reset(self) -> None:
         """Clear all accumulated metrics. Useful for tests."""
         self._data.clear()
+
+    # ── Cross-process persistence hooks ───────────────────────────────────
+
+    def serialize(self) -> dict:
+        """Return a JSON-friendly snapshot of every endpoint's state."""
+        return {
+            "endpoints": {ep: s.to_dict() for ep, s in self._data.items()},
+            "max_endpoints": self._max_endpoints,
+        }
+
+    def merge_serialized(self, payload: dict) -> None:
+        """Merge a payload returned by :meth:`serialize` into this instance.
+
+        New endpoints in *payload* are added up to ``max_endpoints``;
+        additional ones are silently dropped (consistent with the cap
+        enforced by :meth:`record`).
+        """
+        incoming = payload.get("endpoints") or {}
+        for ep, raw in incoming.items():
+            if ep not in self._data and len(self._data) >= self._max_endpoints:
+                continue
+            self._data[ep].merge(_EndpointStats.from_dict(raw))
