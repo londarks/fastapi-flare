@@ -80,6 +80,11 @@ from fastapi_flare.zitadel import (
 )
 
 from fastapi_flare.integrations.sqlalchemy import setup_sqlalchemy
+from fastapi_flare.integrations.logging import (
+    install_asyncio_capture,
+    install_logging_capture,
+    uninstall_logging_capture,
+)
 
 __all__ = [
     "setup",
@@ -90,6 +95,12 @@ __all__ = [
     "FlareLogPage",
     "FlareStats",
     "FlareMetricsSnapshot",
+    # Manual / non-HTTP error capture
+    "capture_exception",
+    "capture_message",
+    "install_logging_capture",
+    "uninstall_logging_capture",
+    "install_asyncio_capture",
     # Webhook notifiers
     "WebhookNotifier",
     "SlackNotifier",
@@ -139,6 +150,7 @@ def setup(
         ``FLARE_ZITADEL_*`` environment variables.  Requires
         ``pip install 'fastapi-flare[auth]'``.
     """
+    global _active_config
     if config is None:
         config = FlareConfig()
 
@@ -225,26 +237,46 @@ def setup(
     if config.zitadel_redirect_uri:
         app.include_router(make_callback_router(config))
 
+    # ── Non-HTTP error capture (optional) ──────────────────────────────────
+    # Attaching the logging handler is safe outside of a loop, so it happens
+    # right away. The asyncio exception handler must be installed *inside*
+    # the running loop, so it's deferred to the lifespan startup below.
+    if config.capture_logging:
+        from fastapi_flare.integrations.logging import install_logging_capture
+        target_loggers = None
+        if config.capture_logging_loggers:
+            target_loggers = [
+                n.strip() for n in config.capture_logging_loggers.split(",") if n.strip()
+            ] or None
+        install_logging_capture(config, loggers=target_loggers)
+
     worker = FlareWorker(config)
     config.worker_instance = worker
-    _wrap_lifespan(app, worker)
+    _wrap_lifespan(app, worker, config)
 
+    _active_config = config
     return config
 
 
-def _wrap_lifespan(app: FastAPI, worker: "FlareWorker") -> None:
+def _wrap_lifespan(app: FastAPI, worker: "FlareWorker", config: FlareConfig) -> None:
     """
     Injects worker start/stop into the app lifespan without overriding
     any lifespan the user may have already defined.
 
     Worker starts before the user's startup code and stops after the
     user's shutdown code, ensuring clean lifecycle ordering.
+
+    If ``capture_asyncio_errors`` is enabled, also installs the loop-level
+    exception handler here (must happen inside the running loop).
     """
     existing_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def flare_lifespan(app: FastAPI):
         worker.start()
+        if config.capture_asyncio_errors:
+            from fastapi_flare.integrations.logging import install_asyncio_capture
+            install_asyncio_capture(config)
         try:
             if existing_lifespan is not None:
                 async with existing_lifespan(app):
@@ -255,3 +287,91 @@ def _wrap_lifespan(app: FastAPI, worker: "FlareWorker") -> None:
             await worker.stop()
 
     app.router.lifespan_context = flare_lifespan
+
+
+async def capture_exception(
+    exc: BaseException,
+    *,
+    config: Optional[FlareConfig] = None,
+    event: str = "manual_exception",
+    message: Optional[str] = None,
+    context: Optional[dict] = None,
+) -> None:
+    """
+    Manually record an exception in Flare.
+
+    Intended for code paths where an error was caught and handled but
+    should still be visible in the dashboard — background jobs, consumers,
+    schedulers, retryable tasks, etc.
+
+    :param exc:     The caught exception.
+    :param config:  Active ``FlareConfig``. Defaults to the one returned
+                    by the most recent :func:`setup` call.
+    :param event:   Event label shown in the dashboard.
+    :param message: Override message (defaults to ``str(exc)``).
+    :param context: Arbitrary dict added to the entry (sensitive keys
+                    are redacted by :mod:`fastapi_flare.queue`).
+
+    Example::
+
+        try:
+            await run_scheduled_job()
+        except Exception as e:
+            await capture_exception(e, event="cron.daily_report",
+                                    context={"job_id": job.id})
+    """
+    import traceback
+    from fastapi_flare.queue import push_log
+
+    cfg = config or _active_config
+    if cfg is None:
+        return  # setup() never ran — silently drop
+
+    await push_log(
+        cfg,
+        level="ERROR",
+        event=event,
+        message=message or str(exc),
+        error=f"{type(exc).__name__}: {exc}",
+        stack_trace="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        context=context,
+    )
+
+
+async def capture_message(
+    message: str,
+    *,
+    level: str = "WARNING",
+    config: Optional[FlareConfig] = None,
+    event: str = "manual_message",
+    context: Optional[dict] = None,
+) -> None:
+    """
+    Record a free-form entry in Flare without an exception.
+
+    Useful for flagging suspicious-but-non-fatal events (rate-limit hits,
+    retry exhaustion, degraded external deps) so they land in the same
+    dashboard as real errors.
+    """
+    from fastapi_flare.queue import push_log
+
+    cfg = config or _active_config
+    if cfg is None:
+        return
+    if level not in ("ERROR", "WARNING"):
+        level = "WARNING"
+
+    await push_log(
+        cfg,
+        level=level,
+        event=event,
+        message=message,
+        context=context,
+    )
+
+
+# Holds the most recent FlareConfig returned by setup(), so capture_exception()
+# and capture_message() can be called without passing the config every time.
+# Multiple concurrent FlareConfigs are rare — users who need that should pass
+# ``config=`` explicitly.
+_active_config: Optional[FlareConfig] = None

@@ -35,6 +35,7 @@ No external services. No SaaS. No noise.
 |---|---|
 | 🚀 **One-line setup** | `setup(app)` — works immediately, no config required |
 | 🔍 **Auto-capture** | HTTP 4xx/5xx and unhandled Python exceptions |
+| 🧵 **Non-HTTP capture** | Background tasks, workers, `logger.exception()`, stray asyncio tasks |
 | 🖥️ **Admin dashboard** | Built-in at `/flare` — dark theme, filters, pagination |
 | 🗄️ **Dual storage** | SQLite (zero-config default) or PostgreSQL (production) |
 | 🔥 **Fire-and-forget** | Logging never blocks your request handlers |
@@ -203,6 +204,11 @@ setup(app, config=FlareConfig(
     request_max_entries=1000,      # ring buffer size for tracked requests
     capture_request_headers=False, # store request headers per entry (adds data volume)
 
+    # ── Non-HTTP error capture ─────────────────────────────────────────
+    capture_logging=False,             # forward WARNING+ from logging module
+    capture_logging_loggers=None,      # "myapp.worker,myapp.jobs" — None = root
+    capture_asyncio_errors=False,      # capture stray asyncio task failures
+
     # ── Worker ────────────────────────────────────────────────────────
     worker_interval_seconds=5,
     worker_batch_size=100,
@@ -231,6 +237,11 @@ FLARE_TRACK_REQUESTS=true
 FLARE_TRACK_2XX_REQUESTS=true   # record 200 OK and other successful responses
 FLARE_REQUEST_MAX_ENTRIES=1000
 FLARE_CAPTURE_REQUEST_HEADERS=false
+
+# Non-HTTP error capture
+FLARE_CAPTURE_LOGGING=true                 # forward logger.exception / logger.error
+FLARE_CAPTURE_LOGGING_LOGGERS=myapp.worker # optional comma-separated allow-list
+FLARE_CAPTURE_ASYNCIO_ERRORS=true          # capture stray asyncio tasks
 ```
 
 ---
@@ -276,9 +287,106 @@ class FlareLogEntry(BaseModel):
 
 ---
 
-## Manual Logging
+## Capturing Non-HTTP Errors
 
-Push custom log entries from anywhere in your application:
+By default `fastapi-flare` captures HTTP 4xx/5xx and unhandled exceptions
+inside the request path. You can also route **errors that happen outside
+any request** — background tasks, workers, cron jobs, consumers, startup
+code, detached asyncio tasks — into the same dashboard.
+
+Three mechanisms are available. Use any combination.
+
+### 1. Python `logging` integration (automatic)
+
+Forwards every `WARNING` / `ERROR` record from Python's standard logging
+into Flare. Zero changes to your existing code — any `logger.exception(...)`
+or `logger.error(...)` already in your codebase starts showing up on `/flare`.
+
+```python
+setup(app, config=FlareConfig(
+    capture_logging=True,
+    # Optional: only listen to specific loggers.
+    # Empty / omitted = attach to the root logger (catches everything that propagates).
+    capture_logging_loggers="myapp.worker,myapp.jobs",
+))
+```
+
+Anywhere in your code:
+
+```python
+import logging
+logger = logging.getLogger("myapp.worker")
+
+try:
+    process_job()
+except Exception:
+    logger.exception("job failed")   # ← appears in /flare
+```
+
+The captured entry gets `event=log.<logger-name>`, `endpoint=None`, and a
+`context` auto-populated with `logger`, `module`, `func`, `line`, `file`.
+
+### 2. Manual capture (explicit)
+
+When you've already caught an exception and want to record it without
+re-raising, call `capture_exception`:
+
+```python
+from fastapi_flare import capture_exception
+
+try:
+    await charge_customer(order)
+except StripeError as e:
+    await capture_exception(
+        e,
+        event="payment.retry_exhausted",
+        context={"order_id": order.id, "attempts": 5},
+    )
+    # handle gracefully — user is not affected
+```
+
+For non-exception signals (rate limits, degraded deps, audit events):
+
+```python
+from fastapi_flare import capture_message
+
+await capture_message(
+    "rate-limit hit on outbound API",
+    level="WARNING",
+    event="outbound.rate_limited",
+    context={"api": "sendgrid", "hits": 142},
+)
+```
+
+### 3. asyncio unhandled-task capture
+
+`asyncio.create_task(...)` that raises without being awaited normally
+**disappears silently** — the event loop just prints a warning to stderr.
+Enable capture so these land on the dashboard:
+
+```python
+setup(app, config=FlareConfig(
+    capture_asyncio_errors=True,
+))
+```
+
+Now any detached task that blows up gets recorded with
+`event=asyncio.unhandled`, full stack trace, and a `context` describing
+the task.
+
+### `context` — free-form metadata
+
+The `context` dict you pass (or the one auto-filled by the logging handler)
+is stored as JSON and rendered under the **Context** section of the modal.
+Use it for anything that doesn't fit the fixed fields — job IDs, provider
+names, feature flags, versions, etc. Keys matching
+`FlareConfig.sensitive_fields` (`password`, `token`, `api_key`, …) are
+automatically redacted before storage.
+
+### Low-level API
+
+All three mechanisms ultimately call `push_log`, which is still public
+if you need full control:
 
 ```python
 from fastapi_flare.queue import push_log
@@ -412,6 +520,29 @@ FLARE_PG_DSN=postgresql://user:pass@localhost:5432/mydb
 | `GET /boom` | Triggers `RuntimeError` → captured as ERROR |
 | `GET /items/999` | Triggers `HTTPException 404` → captured as WARNING |
 | `GET /flare` | Opens the error dashboard |
+
+### Non-HTTP capture demo
+
+A dedicated example exercises the `capture_logging`,
+`capture_asyncio_errors`, `capture_exception`, and `capture_message`
+features end-to-end:
+
+```bash
+poetry run uvicorn examples.example_non_http_capture:app --reload --port 8002
+# Dashboard at http://localhost:8002/flare
+```
+
+| Route | What it captures |
+|---|---|
+| `GET /trigger/logger` | `logger.exception(...)` inside a handler |
+| `GET /trigger/manual` | `capture_exception(e, context=...)` |
+| `GET /trigger/asyncio` | A stray `asyncio.create_task` that raises |
+| `GET /trigger/background` | A worker thread that logs via `logger.exception` |
+| `GET /trigger/warn` | `capture_message(...)` at WARNING level |
+
+The app also emits two entries on **startup** — proving that records
+outside the request path are visible on `/flare` before anyone hits
+an endpoint.
 
 ---
 

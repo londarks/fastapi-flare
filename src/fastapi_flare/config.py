@@ -156,6 +156,23 @@ class FlareConfig(BaseSettings):
     worker_interval_seconds: int = 5
     worker_batch_size: int = 100
 
+    # ── Non-HTTP error capture ───────────────────────────────────────────────
+    # Forward records from Python's ``logging`` module (WARNING+) to Flare.
+    # Captures errors from background tasks, workers, cron jobs — anything
+    # that uses ``logger.error`` / ``logger.exception`` outside a request.
+    # Env: FLARE_CAPTURE_LOGGING=true
+    capture_logging: bool = False
+
+    # Comma-separated list of logger names to attach to. Empty = root logger,
+    # which catches every propagated record.
+    # Env: FLARE_CAPTURE_LOGGING_LOGGERS=myapp.worker,myapp.jobs
+    capture_logging_loggers: Optional[str] = None
+
+    # Install an asyncio event-loop exception handler that captures
+    # unhandled errors from fire-and-forget tasks.
+    # Env: FLARE_CAPTURE_ASYNCIO_ERRORS=true
+    capture_asyncio_errors: bool = False
+
     # ── Capture options ──────────────────────────────────────────────────────
     sensitive_fields: frozenset[str] = frozenset({
         "password", "passwd", "token", "api_key", "apikey",
