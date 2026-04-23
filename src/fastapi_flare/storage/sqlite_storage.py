@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS flare_settings (
 """
 
 
+_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS flare_metrics_snapshots (
+    worker_id  TEXT     PRIMARY KEY,
+    updated_at DATETIME NOT NULL,
+    payload    TEXT     NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_flare_metrics_updated
+    ON flare_metrics_snapshots(updated_at);
+"""
+
+
 _REQUESTS_DDL = """
 CREATE TABLE IF NOT EXISTS requests (
     id              INTEGER  PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +146,7 @@ class SQLiteStorage:
         await self._db.executescript(_DDL)
         await self._db.executescript(_REQUESTS_DDL)
         await self._db.executescript(_SETTINGS_DDL)
+        await self._db.executescript(_METRICS_DDL)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.commit()
@@ -490,6 +503,57 @@ class SQLiteStorage:
             await db.commit()
         except Exception:
             pass
+
+    # ── Metrics snapshots ──────────────────────────────────────────────────
+
+    async def flush_metrics(self, worker_id: str, payload: dict) -> None:
+        """Upsert this worker's latest FlareMetrics snapshot.
+
+        One row per worker_id — each call overwrites the previous payload,
+        keeping table size bounded by worker count, not runtime.
+        """
+        try:
+            db = await self._ensure_db()
+            await db.execute(
+                "INSERT INTO flare_metrics_snapshots (worker_id, updated_at, payload)"
+                " VALUES (?, ?, ?)"
+                " ON CONFLICT(worker_id) DO UPDATE SET"
+                "   updated_at = excluded.updated_at,"
+                "   payload    = excluded.payload",
+                (
+                    worker_id,
+                    datetime.now(tz=timezone.utc),
+                    json.dumps(payload, default=str),
+                ),
+            )
+            await db.commit()
+        except Exception:
+            pass  # metrics persistence must never break the worker
+
+    async def load_metrics_snapshots(
+        self, *, since_seconds: int
+    ) -> list[tuple[str, dict]]:
+        """Return every snapshot updated within the last *since_seconds*.
+
+        Older rows are skipped (treated as belonging to a crashed worker).
+        """
+        try:
+            db = await self._ensure_db()
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=since_seconds)
+            rows = await db.execute_fetchall(
+                "SELECT worker_id, payload FROM flare_metrics_snapshots"
+                " WHERE updated_at >= ?",
+                (cutoff,),
+            )
+            out: list[tuple[str, dict]] = []
+            for r in rows:
+                try:
+                    out.append((r["worker_id"], json.loads(r["payload"])))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
 
     # ── Read path ─────────────────────────────────────────────────────────
 

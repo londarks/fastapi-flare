@@ -182,3 +182,30 @@ class FlareStorageProtocol(Protocol):
         settings store.  Creates the row if it does not exist.
         """
         ...
+
+    # ── Metrics persistence (cross-process snapshot merge) ────────────────
+
+    async def flush_metrics(self, worker_id: str, payload: dict) -> None:
+        """
+        Persist one worker's in-memory metrics snapshot.
+
+        Each ``worker_id`` holds exactly one row — subsequent calls UPSERT
+        (overwriting the previous payload) so storage growth stays bounded
+        regardless of runtime.
+
+        Must NEVER raise — called from the background worker which must
+        not crash on storage faults.
+        """
+        ...
+
+    async def load_metrics_snapshots(
+        self, *, since_seconds: int
+    ) -> list[tuple[str, dict]]:
+        """
+        Return every stored snapshot updated within the last *since_seconds*.
+
+        Returns:
+            List of ``(worker_id, payload)`` tuples. Stale snapshots from
+            crashed workers fall off naturally once *since_seconds* expires.
+        """
+        ...

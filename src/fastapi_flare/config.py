@@ -64,6 +64,22 @@ class FlareConfig(BaseSettings):
     # prevent unbounded memory growth from scanners / URL enumeration attacks.
     metrics_max_endpoints: int = 500
 
+    # Persist the in-memory metrics snapshot to the storage backend so that
+    # multiple uvicorn workers / pods can see each other's aggregates and the
+    # dashboard survives process restarts.
+    # Off by default — single-process dev setups don't need it.
+    # Env: FLARE_METRICS_PERSISTENCE=true
+    metrics_persistence: bool = False
+
+    # How often the worker persists this process's FlareMetrics snapshot.
+    # Env: FLARE_METRICS_FLUSH_INTERVAL_SECONDS
+    metrics_flush_interval_seconds: int = 30
+
+    # Snapshots older than this are treated as belonging to a crashed worker
+    # and ignored when merging at dashboard render time.
+    # Env: FLARE_METRICS_SNAPSHOT_TTL_SECONDS
+    metrics_snapshot_ttl_seconds: int = 180
+
     # ── Request body capture ─────────────────────────────────────────────────
     # Maximum bytes to read and store from the request body on error events.
     # Set to 0 to disable body capture entirely.

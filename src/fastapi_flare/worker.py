@@ -14,11 +14,26 @@ Every worker_interval_seconds the worker:
 from __future__ import annotations
 
 import asyncio
+import os
+import socket
 import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
+
+
+def _generate_worker_id() -> str:
+    """Unique identifier for this process across hosts.
+
+    Combines hostname + PID so metrics snapshots from separate pods and
+    uvicorn workers don't collide in storage.
+    """
+    try:
+        host = socket.gethostname() or "unknown"
+    except Exception:
+        host = "unknown"
+    return f"{host}-{os.getpid()}"
 
 
 class FlareWorker:
@@ -27,6 +42,8 @@ class FlareWorker:
         self._task: Optional[asyncio.Task] = None
         self._flush_cycles: int = 0
         self._started_at: Optional[float] = None
+        self._worker_id: str = _generate_worker_id()
+        self._last_metrics_flush: float = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -47,12 +64,43 @@ class FlareWorker:
 
     # ── Internals ────────────────────────────────────────────────────────────
 
+    @property
+    def worker_id(self) -> str:
+        """Stable identifier for this process's metrics snapshots."""
+        return self._worker_id
+
     async def _flush(self) -> None:
         """Delegate one flush cycle to the active storage backend."""
         storage = self._config.storage_instance
         if storage is None:
             return
         await storage.flush()
+
+    async def _maybe_flush_metrics(self) -> None:
+        """Persist the in-memory metrics snapshot if the interval has elapsed.
+
+        No-op when ``metrics_persistence`` is disabled or there is no
+        storage backend / metrics aggregator. Never raises.
+        """
+        if not self._config.metrics_persistence:
+            return
+        interval = self._config.metrics_flush_interval_seconds
+        now = time.monotonic()
+        if now - self._last_metrics_flush < interval:
+            return
+
+        storage = self._config.storage_instance
+        metrics = self._config.metrics_instance
+        if storage is None or metrics is None:
+            return
+
+        try:
+            payload = metrics.serialize()
+            await storage.flush_metrics(self._worker_id, payload)
+        except Exception:
+            pass  # never break the worker loop
+        finally:
+            self._last_metrics_flush = now
 
     async def _loop(self) -> None:
         """Main worker loop. Runs until cancelled."""
@@ -64,6 +112,12 @@ class FlareWorker:
                 raise
             except Exception:
                 pass  # Never crash the loop
+            try:
+                await self._maybe_flush_metrics()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
             await asyncio.sleep(self._config.worker_interval_seconds)
 
     # ── Public lifecycle ─────────────────────────────────────────────────────

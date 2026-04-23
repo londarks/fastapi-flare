@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS {table} (
 """
 
 
+def _build_metrics_ddl(table: str) -> str:
+    """Generate CREATE TABLE + index DDL for the metrics snapshot store."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    worker_id  TEXT        PRIMARY KEY,
+    updated_at TIMESTAMPTZ NOT NULL,
+    payload    JSONB       NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_{table}_updated
+    ON {table} (updated_at DESC);
+"""
+
+
 def _build_requests_ddl(table: str) -> str:
     """Generate CREATE TABLE + indexes DDL for the HTTP requests ring-buffer table."""
     return f"""
@@ -153,6 +167,12 @@ class PostgreSQLStorage:
         base = self._table
         return base.replace("_logs", "_settings") if "_logs" in base else base + "_settings"
 
+    @property
+    def _metrics_table(self) -> str:
+        """Derived metrics snapshot table, e.g. ``flare_logs`` → ``flare_metrics``."""
+        base = self._table
+        return base.replace("_logs", "_metrics") if "_logs" in base else base + "_metrics"
+
     # ── Lazy pool init ────────────────────────────────────────────────────────
 
     async def _ensure_pool(self) -> Any:
@@ -179,6 +199,7 @@ class PostgreSQLStorage:
             await conn.execute(_build_ddl(self._table))
             await conn.execute(_build_requests_ddl(self._requests_table))
             await conn.execute(_build_settings_ddl(self._settings_table))
+            await conn.execute(_build_metrics_ddl(self._metrics_table))
 
         return self._pool
 
@@ -548,6 +569,53 @@ class PostgreSQLStorage:
                 )
         except Exception:
             pass
+
+    # ── Metrics snapshots ──────────────────────────────────────────────────
+
+    async def flush_metrics(self, worker_id: str, payload: dict) -> None:
+        """Upsert this worker's latest FlareMetrics snapshot."""
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"INSERT INTO {self._metrics_table}"
+                    f" (worker_id, updated_at, payload) VALUES ($1, $2, $3::jsonb)"
+                    f" ON CONFLICT(worker_id) DO UPDATE SET"
+                    f"   updated_at = EXCLUDED.updated_at,"
+                    f"   payload    = EXCLUDED.payload",
+                    worker_id,
+                    datetime.now(tz=timezone.utc),
+                    json.dumps(payload, default=str),
+                )
+        except Exception:
+            pass
+
+    async def load_metrics_snapshots(
+        self, *, since_seconds: int
+    ) -> list[tuple[str, dict]]:
+        """Return every snapshot updated within the last *since_seconds*."""
+        try:
+            pool = await self._ensure_pool()
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=since_seconds)
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"SELECT worker_id, payload FROM {self._metrics_table}"
+                    f" WHERE updated_at >= $1",
+                    cutoff,
+                )
+            out: list[tuple[str, dict]] = []
+            for r in rows:
+                raw = r["payload"]
+                try:
+                    out.append(
+                        (r["worker_id"], raw if isinstance(raw, dict) else json.loads(raw))
+                    )
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
     # ── Read path ─────────────────────────────────────────────────────────────
 
     async def list_logs(
