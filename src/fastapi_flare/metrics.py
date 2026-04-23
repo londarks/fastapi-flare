@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 # Upper bounds (inclusive, in milliseconds) for the latency histogram.
@@ -248,3 +249,68 @@ class FlareMetrics:
             if ep not in self._data and len(self._data) >= self._max_endpoints:
                 continue
             self._data[ep].merge(_EndpointStats.from_dict(raw))
+
+
+async def build_merged_snapshot(config) -> tuple[list[dict], int, int, bool, int, list[str]]:
+    """
+    Build the aggregate view shown on the /flare/metrics dashboard.
+
+    When ``metrics_persistence`` is disabled this simply returns the
+    in-process ``FlareMetrics.snapshot()`` — same behaviour as before.
+
+    When enabled, it:
+      1. Loads every snapshot updated within ``metrics_snapshot_ttl_seconds``
+         from the storage backend (one row per worker).
+      2. Replaces this worker's own stored row with the live in-memory state
+         (fresher than the last flush).
+      3. Merges the histograms / counters across workers and returns the
+         combined view — p95/p99 survive across processes and pods.
+
+    Returns:
+        ``(endpoints, total_requests, total_errors, at_capacity, worker_count, worker_ids)``
+    """
+    local: Optional["FlareMetrics"] = config.metrics_instance
+    storage = getattr(config, "storage_instance", None)
+
+    # No persistence, or missing deps → degrade to the local view.
+    if not getattr(config, "metrics_persistence", False) or storage is None or local is None:
+        if local is None:
+            return ([], 0, 0, False, 0, [])
+        return (
+            local.snapshot(),
+            local.total_requests,
+            local.total_errors,
+            local.at_capacity,
+            1,
+            [],
+        )
+
+    ttl = int(getattr(config, "metrics_snapshot_ttl_seconds", 180))
+    try:
+        rows = await storage.load_metrics_snapshots(since_seconds=ttl)
+    except Exception:
+        rows = []
+
+    worker_instance = getattr(config, "worker_instance", None)
+    local_worker_id = getattr(worker_instance, "worker_id", None)
+
+    merged = FlareMetrics(max_endpoints=local._max_endpoints)
+    seen: list[str] = []
+    for worker_id, payload in rows:
+        if worker_id == local_worker_id:
+            continue  # prefer the live in-memory state below
+        merged.merge_serialized(payload)
+        seen.append(worker_id)
+
+    merged.merge_serialized(local.serialize())
+    if local_worker_id:
+        seen.append(local_worker_id)
+
+    return (
+        merged.snapshot(),
+        merged.total_requests,
+        merged.total_errors,
+        merged.at_capacity,
+        len(seen),
+        seen,
+    )

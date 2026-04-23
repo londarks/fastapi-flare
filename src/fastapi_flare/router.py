@@ -441,16 +441,21 @@ def make_router(config) -> APIRouter:
 
     @router.get("/api/metrics", dependencies=api_deps)
     async def get_metrics() -> FlareMetricsSnapshot:
+        from fastapi_flare.metrics import build_merged_snapshot
+
         m = config.metrics_instance
         if m is None:
             return FlareMetricsSnapshot(endpoints=[], total_requests=0, total_errors=0)
-        snap = m.snapshot()
+        endpoints, total_req, total_err, at_cap, worker_count, worker_ids = \
+            await build_merged_snapshot(config)
         return FlareMetricsSnapshot(
-            endpoints=[FlareEndpointMetric(**e) for e in snap],
-            total_requests=m.total_requests,
-            total_errors=m.total_errors,
-            at_capacity=m.at_capacity,
+            endpoints=[FlareEndpointMetric(**e) for e in endpoints],
+            total_requests=total_req,
+            total_errors=total_err,
+            at_capacity=at_cap,
             max_endpoints=m._max_endpoints,
+            worker_count=worker_count,
+            worker_ids=worker_ids,
         )
 
     @router.post("/api/storage/trim", dependencies=api_deps)

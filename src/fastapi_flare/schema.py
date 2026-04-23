@@ -64,6 +64,12 @@ class FlareMetricsSnapshot(BaseModel):
     total_errors: int
     at_capacity: bool = False
     max_endpoints: int = 500
+    # Number of workers contributing to this snapshot (always 1 when
+    # metrics_persistence is disabled).
+    worker_count: int = 1
+    # Identifiers of the workers whose state was merged (empty when
+    # persistence is off).
+    worker_ids: list[str] = []
 
 
 class FlareStats(BaseModel):
