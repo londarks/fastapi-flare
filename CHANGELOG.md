@@ -5,6 +5,36 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-04-24
+
+### Changed — Kinetic Obsidian palette refresh (pure CSS)
+Dashboard gets a visual refresh inspired by a "Kinetic Obsidian" command-center
+aesthetic. No markup or behaviour changes — only `_styles.html` and
+`layout.html` (fonts).
+
+- **Primary accent** switched from red (`#dc2626`) to **Kinetic Flare orange**
+  (`#ff5f1f`), better matching the product name (flare = orange flame). The
+  `--red*` CSS variable names are preserved as aliases for the accent to avoid
+  churn across templates.
+- **Obsidian background stack** (`#030303` → `#0e0e0e` → `#141313`) replaces
+  the previous flat greys.
+- **Typography** now loads `Inter` and `JetBrains Mono` from Google Fonts
+  (already the fallback stack, now explicit). Uppercase labels get real
+  letter-spacing; mono font is used consistently on timestamps, badges,
+  chips, fingerprints, endpoints.
+- **Radii** bumped: cards/table/filters/modal from ~10–12px to 20–24px.
+- **Glass feel** on header, sidebar, modal, toast via `backdrop-filter: blur`.
+- **Atmospheric underglow** — two fixed-position blurred circles (violet +
+  orange) behind the main content for depth.
+- **Buttons**: primary buttons now use a subtle gradient and a soft drop-glow.
+- **Live dot** got a scale-based `pulse-ring` animation and drop-shadow.
+- **Stat cards** got a hover lift + violet radial underglow on hover.
+- **Nav items** animate their icons left→right on hover; active state gets
+  inset orange shadow.
+
+Existing users see the new look on their next refresh. All tests pass
+unchanged (52/52).
+
 ## [0.3.2] — 2026-04-24
 
 ### Added
@@ -126,6 +156,7 @@ See `git log` for the historical series covering initial release, Zitadel
 OAuth2 setup (bearer + browser PKCE), dashboard layout, metrics tab, and
 the request-body capture fix (`BodyCacheMiddleware`).
 
+[0.3.3]: https://github.com/londarks/fastapi-flare/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/londarks/fastapi-flare/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/londarks/fastapi-flare/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/londarks/fastapi-flare/compare/v0.2.2...v0.3.0
