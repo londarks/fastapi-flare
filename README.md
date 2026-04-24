@@ -36,6 +36,7 @@ No external services. No SaaS. No noise.
 | 🚀 **One-line setup** | `setup(app)` — works immediately, no config required |
 | 🔍 **Auto-capture** | HTTP 4xx/5xx and unhandled Python exceptions |
 | 🧵 **Non-HTTP capture** | Background tasks, workers, `logger.exception()`, stray asyncio tasks |
+| 🧩 **Issue grouping** | Deterministic fingerprint collapses repeated errors into one issue with occurrence count, first/last seen, resolve/reopen |
 | 🖥️ **Admin dashboard** | Built-in at `/flare` — dark theme, filters, pagination |
 | 🗄️ **Dual storage** | SQLite (zero-config default) or PostgreSQL (production) |
 | 🔥 **Fire-and-forget** | Logging never blocks your request handlers |
@@ -259,6 +260,42 @@ The built-in dashboard gives you full visibility into your application errors wi
 | **Detail modal** | Full message, error, stack trace, request metadata, context JSON |
 | **Storage overview** | Backend info, connection status, pool stats (PostgreSQL) or file size (SQLite) |
 | **Auto-refresh** | 30s polling toggle |
+
+---
+
+## Issue Grouping
+
+When a log is captured, `fastapi-flare` computes an **issue fingerprint** from
+`(exception_type, endpoint, top-5 stack frames)` — line numbers and absolute
+paths are stripped so ordinary refactors do not produce a new issue. Every
+matching occurrence upserts a single row in `flare_issues` with
+`occurrence_count`, `first_seen`, `last_seen`, and a `resolved` flag.
+
+- **500 identical errors → 1 issue** with `occurrence_count = 500`.
+- **Same `ValueError`, different call path → separate issues** (useful to tell
+  apart regressions from unrelated code paths that happen to raise the same
+  type).
+- **Resolve / reopen** from the dashboard. A resolved issue is automatically
+  reopened on the next occurrence.
+- **Issue state survives retention**: once old logs are purged by
+  `retention_hours`, the issue row keeps the aggregate counters.
+
+Dashboard: open `/flare/issues` for the grouped view, or `/flare` for the raw
+stream. JSON API:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`   | `/flare/api/issues`              | Paginated list (filter `resolved=true/false`, `search=...`) |
+| `GET`   | `/flare/api/issues/stats`        | Open / resolved / new counts for the stat cards |
+| `GET`   | `/flare/api/issues/{fingerprint}` | Issue detail + paginated occurrences |
+| `PATCH` | `/flare/api/issues/{fingerprint}` | Body `{"resolved": true/false}` — toggle status |
+
+Try it out with the dedicated example:
+
+```bash
+poetry run uvicorn examples.example_issues:app --reload --port 8003
+# then hit /boom/value-error a few times and open /flare/issues
+```
 
 ---
 

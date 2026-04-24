@@ -110,9 +110,15 @@ async def push_log(
         if storage is not None:
             await storage.enqueue(entry)
             try:
+                if event == "validation_error":
+                    exc_label: Optional[str] = "RequestValidationError"
+                elif event == "http_exception" and http_status:
+                    exc_label = f"HTTP {http_status}"
+                else:
+                    exc_label = _extract_exception_type(error)
                 await storage.upsert_issue(
                     fingerprint=fingerprint,
-                    exception_type=_extract_exception_type(error),
+                    exception_type=exc_label,
                     endpoint=endpoint,
                     sample_message=message,
                     sample_request_id=request_id,
