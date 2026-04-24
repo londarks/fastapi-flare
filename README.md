@@ -263,39 +263,170 @@ The built-in dashboard gives you full visibility into your application errors wi
 
 ---
 
-## Issue Grouping
+## Issue Grouping *(new in 0.3.0)*
 
-When a log is captured, `fastapi-flare` computes an **issue fingerprint** from
-`(exception_type, endpoint, top-5 stack frames)` — line numbers and absolute
-paths are stripped so ordinary refactors do not produce a new issue. Every
-matching occurrence upserts a single row in `flare_issues` with
-`occurrence_count`, `first_seen`, `last_seen`, and a `resolved` flag.
+Until 0.2.x every captured error was a standalone row. Five hundred occurrences
+of the same `ValueError` meant five hundred lines to read. Starting in 0.3.0
+`fastapi-flare` groups semantically-equivalent errors into **issues** the way
+Sentry and Rollbar do — with occurrence counting, first/last-seen, and a
+resolve/reopen workflow.
 
-- **500 identical errors → 1 issue** with `occurrence_count = 500`.
-- **Same `ValueError`, different call path → separate issues** (useful to tell
-  apart regressions from unrelated code paths that happen to raise the same
-  type).
-- **Resolve / reopen** from the dashboard. A resolved issue is automatically
-  reopened on the next occurrence.
-- **Issue state survives retention**: once old logs are purged by
-  `retention_hours`, the issue row keeps the aggregate counters.
+### What changed
 
-Dashboard: open `/flare/issues` for the grouped view, or `/flare` for the raw
-stream. JSON API:
+- New aba **Issues** at `/flare/issues` — grouped view.
+- New table `flare_issues` (auto-migrated on both SQLite and PostgreSQL).
+- New column `issue_fingerprint` on `flare_logs` (idempotent `ADD COLUMN IF NOT EXISTS`).
+- Every `push_log()` now computes a deterministic fingerprint and upserts the issue.
+- New JSON API under `/flare/api/issues`.
+- The existing Errors tab (`/flare`) is unchanged — it remains the raw stream.
+
+**No configuration required.** Upgrading is transparent; existing deployments
+get the new table and column on next start, and rows created before the upgrade
+simply have `issue_fingerprint = NULL`.
+
+### How the fingerprint works
+
+For each captured log, a 16-char `blake2b` hash is computed from:
+
+| Scenario | Hash input |
+|---|---|
+| Has stack trace (generic exception / `logger.exception`) | `exception_type \| endpoint \| top-5 frames` |
+| HTTP-only signal (raised `HTTPException`) | `http \| status_code \| endpoint` |
+| Validation error (`RequestValidationError`) | `validation \| endpoint` |
+| Fallback | `event \| endpoint \| message[:200]` |
+
+Each stack frame is normalised to `(basename(file), function_name)` — **line
+numbers and absolute paths are dropped on purpose** so ordinary refactors
+(moving code down the file, renaming a `/srv/app/...` path) do not re-fingerprint
+the same bug. Rename the file or the function and the issue does split — that's
+usually the signal you want.
+
+This is intentionally different from the cooldown fingerprint in
+`fastapi_flare.alerting`, which stays coarse (`event + endpoint`) to throttle
+Slack/Discord pings.
+
+### Behaviour you can rely on
+
+- **500 identical errors → 1 issue** with `occurrence_count = 500`, the latest
+  `last_seen`, and the original `first_seen` preserved.
+- **Same `ValueError`, different call path → separate issues.** Lets you tell
+  apart an actual regression from an unrelated code path that happens to raise
+  the same type.
+- **Resolved issues reopen automatically** the next time the same fingerprint
+  fires — `resolved` flips back to `false` and `resolved_at` is cleared.
+- **Level upgrades, never downgrades.** A WARNING issue that later hits ERROR
+  becomes ERROR for good.
+- **Issue state survives retention.** When `retention_hours` purges raw logs,
+  the `flare_issues` row keeps `occurrence_count`, `first_seen`, and
+  `last_seen`. Only the drill-down list of occurrences shrinks.
+
+### Using the dashboard
+
+Open `/flare/issues`:
+
+- **Stat cards** at the top — Open / New (24h) / Resolved (7d) / Total.
+- **Filter chips** — All / Open / Resolved.
+- **Search** — matches on `exception_type`, `endpoint`, or sample message.
+- **Row click** — opens an issue modal with the list of occurrences. Each
+  occurrence row is clickable and shows the full stack trace, request body,
+  headers, and context, the same as the Errors tab.
+- **Resolve / Reopen** button inside the modal. The change is reflected
+  immediately in the stat cards and list.
+
+### JSON API
 
 | Method | Path | Description |
 |---|---|---|
-| `GET`   | `/flare/api/issues`              | Paginated list (filter `resolved=true/false`, `search=...`) |
-| `GET`   | `/flare/api/issues/stats`        | Open / resolved / new counts for the stat cards |
-| `GET`   | `/flare/api/issues/{fingerprint}` | Issue detail + paginated occurrences |
-| `PATCH` | `/flare/api/issues/{fingerprint}` | Body `{"resolved": true/false}` — toggle status |
+| `GET`   | `/flare/api/issues`                 | Paginated list. Query: `page`, `limit`, `resolved=true/false`, `search=...` |
+| `GET`   | `/flare/api/issues/stats`           | Counts used by the stat cards |
+| `GET`   | `/flare/api/issues/{fingerprint}`   | Issue detail + paginated occurrences |
+| `PATCH` | `/flare/api/issues/{fingerprint}`   | Body `{"resolved": true \| false}` |
 
-Try it out with the dedicated example:
+Example:
+
+```bash
+curl -s http://localhost:8003/flare/api/issues?resolved=false | jq
+# { "issues": [ {...} ], "total": 12, "page": 1, "limit": 50, "pages": 1 }
+
+curl -X PATCH http://localhost:8003/flare/api/issues/63d05fb9d296a8e1 \
+  -H 'Content-Type: application/json' \
+  -d '{"resolved": true}'
+# { "ok": true, "action": "issue_status", "detail": "Issue resolved" }
+```
+
+Full reference (fingerprint internals, storage model, migration, gotchas):
+[`docs/issues.md`](docs/issues.md).
+
+### Try it — the demo app
+
+A dedicated example under `examples/example_issues.py` exercises every
+grouping scenario:
 
 ```bash
 poetry run uvicorn examples.example_issues:app --reload --port 8003
-# then hit /boom/value-error a few times and open /flare/issues
 ```
+
+| Route | What it proves |
+|---|---|
+| `GET /boom/value-error` (×10) | 1 issue with `occurrence_count = 10` |
+| `GET /boom/key-error`   (×5)  | separate issue (different exception type) |
+| `GET /boom/deep`        (×3)  | separate issue (same `ValueError`, different stack) |
+| `GET /items/{iid}`            | 404 → `HTTP 404` issue per endpoint |
+| `GET /users`                  | 403 → `HTTP 403` issue |
+| `POST /signup` with bad body  | 422 → `RequestValidationError` issue per endpoint |
+| `POST /orders` with bad total | 500 → `RuntimeError` issue |
+| `GET /trigger/manual`         | captured via `capture_exception()` outside the request path |
+| `GET /stress/{n}`             | generates *n* errors at once to exercise pagination |
+
+Full validation walkthrough:
+
+```bash
+# 1. Start the app
+poetry run uvicorn examples.example_issues:app --reload --port 8003
+
+# 2. Fire traffic
+for i in {1..10}; do curl -s http://localhost:8003/boom/value-error >/dev/null; done
+for i in {1..5};  do curl -s http://localhost:8003/boom/key-error   >/dev/null; done
+curl -s http://localhost:8003/items/999 >/dev/null
+curl -s http://localhost:8003/stress/50 >/dev/null
+
+# 3. Open /flare/issues — you'll see one row per issue kind with the right counts.
+# 4. Click a row → modal shows every occurrence. Click one → full stack trace.
+# 5. Click Resolve → issue leaves the Open filter.
+# 6. Fire the same endpoint again → issue reopens automatically.
+```
+
+### What's stored — `FlareIssue`
+
+```python
+class FlareIssue(BaseModel):
+    fingerprint: str            # 16-char blake2b hex, primary key
+    exception_type: str | None  # "ValueError" | "HTTP 404" | "RequestValidationError" | ...
+    endpoint: str | None
+    sample_message: str         # first message seen for this issue
+    sample_request_id: str | None
+    occurrence_count: int
+    first_seen: datetime
+    last_seen: datetime
+    level: Literal["ERROR", "WARNING"]  # upgrades to ERROR, never downgrades
+    resolved: bool
+    resolved_at: datetime | None
+```
+
+### Known limitations
+
+- **Dynamic path params** — endpoints like `/items/1` and `/items/2` currently
+  produce separate issues because handlers still capture `request.url.path`
+  (raw). A follow-up will use the matched route template (`/items/{iid}`)
+  instead, collapsing those into a single issue.
+- **SQLite multi-tenancy** — `flare_issues` uses a fixed name on SQLite
+  (matches the rest of the SQLite backend, which already has fixed `logs`,
+  `requests`, `flare_settings`, `flare_metrics_snapshots`). PostgreSQL
+  derives the issues table from `pg_table_name` like everything else, so
+  multi-project PG setups work out of the box.
+- **No backfill** — logs captured before 0.3.0 have `NULL` for
+  `issue_fingerprint` and are not surfaced on the Issues tab. Running traffic
+  after upgrade populates the grouping from that point forward.
 
 ---
 
@@ -305,12 +436,13 @@ Every captured error is stored as a structured `FlareLogEntry`:
 
 ```python
 class FlareLogEntry(BaseModel):
-    id: str                    # backend-native ID (row id for PG/SQLite)
+    id: str                       # backend-native ID (row id for PG/SQLite)
     timestamp: datetime
     level: Literal["ERROR", "WARNING"]
-    event: str                 # e.g. "http_exception", "unhandled_exception"
+    event: str                    # e.g. "http_exception", "unhandled_exception"
     message: str
-    request_id: str | None     # UUID from X-Request-ID header
+    request_id: str | None        # UUID from X-Request-ID header
+    issue_fingerprint: str | None # links this row to a FlareIssue (v0.3.0+)
     endpoint: str | None
     http_method: str | None
     http_status: int | None
@@ -318,8 +450,8 @@ class FlareLogEntry(BaseModel):
     duration_ms: int | None
     error: str | None
     stack_trace: str | None
-    context: dict | None       # additional structured data
-    request_body: dict | None  # captured request body (if enabled)
+    context: dict | None          # additional structured data
+    request_body: dict | None     # captured request body (if enabled)
 ```
 
 ---
