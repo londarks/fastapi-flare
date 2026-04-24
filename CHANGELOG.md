@@ -5,6 +5,28 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-04-24
+
+### Changed — tone down the Errors table
+The 0.3.3 palette stacked too much orange inside the Errors table: every row
+had an orange border-left, an orange badge, and hovering tinted the whole row
+orange again — the combination read as a wall of orange. Cleaned up:
+
+- **Row hover** is now neutral (`rgba(255,255,255,0.025)`) instead of orange,
+  so hover does not compound with the accent stripe on `level-error` rows.
+- **Level stripe** on error/warning rows dropped from solid `border-left` to
+  `inset box-shadow` at 55% opacity. Reads as an accent, not a paint bar, and
+  no longer competes with cell padding.
+- **`.badge-level`** shrank back from pill (99px radius, 10px padding) to a
+  compact rounded rectangle (6px radius, 3×8px padding, 9px font) — closer
+  to the original density and the mockup's "Critical" chip.
+- **Stat-card left stripe** softened to 55% opacity; removed the outer orange
+  drop-glow (`-3px 0 24px`) that was bleeding into the surrounding card.
+- **Stat-value.red** switched from saturated `#ff5f1f` to the peach tint
+  `#ffb59c` — big numbers are sharper and less alarm-colored.
+
+No markup change. Tests unchanged (52/52).
+
 ## [0.3.3] — 2026-04-24
 
 ### Changed — Kinetic Obsidian palette refresh (pure CSS)
@@ -156,6 +178,7 @@ See `git log` for the historical series covering initial release, Zitadel
 OAuth2 setup (bearer + browser PKCE), dashboard layout, metrics tab, and
 the request-body capture fix (`BodyCacheMiddleware`).
 
+[0.3.4]: https://github.com/londarks/fastapi-flare/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/londarks/fastapi-flare/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/londarks/fastapi-flare/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/londarks/fastapi-flare/compare/v0.3.0...v0.3.1
