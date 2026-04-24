@@ -31,6 +31,7 @@ class FlareLogEntry(BaseModel):
     stack_trace: Optional[str] = None
     context: Optional[dict] = None
     request_body: Optional[Any] = None
+    response_body: Optional[Any] = None
 
     model_config = {"from_attributes": True}
 
@@ -134,6 +135,7 @@ class FlareRequestEntry(BaseModel):
     user_agent: Optional[str] = None
     request_headers: Optional[dict] = None
     request_body: Optional[Any] = None
+    response_body: Optional[Any] = None
     # linked error entry id (populated by the router when joining)
     error_id: Optional[str] = None
 

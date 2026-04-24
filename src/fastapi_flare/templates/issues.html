@@ -351,6 +351,11 @@
         <div class="detail-section-title"><i class="fas fa-arrow-up-from-bracket"></i> Request Body</div>
         ${codeBlock(esc(typeof log.request_body === 'object' ? JSON.stringify(log.request_body, null, 2) : String(log.request_body)))}
       </div>` : ''}
+      ${log.response_body != null ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-arrow-down-to-bracket"></i> Response Body</div>
+        ${codeBlock(esc(typeof log.response_body === 'object' ? JSON.stringify(log.response_body, null, 2) : String(log.response_body)))}
+      </div>` : ''}
       <div class="detail-section">
         <div class="detail-section-title"><i class="fas fa-info-circle"></i> Request Info</div>
         <div class="meta-grid">

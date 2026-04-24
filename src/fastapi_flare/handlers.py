@@ -27,6 +27,21 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
+def _capture_response_payload(
+    config: "FlareConfig", status_code: int, payload: Any
+) -> Any:
+    """Return *payload* when response-body capture is on and status meets threshold.
+
+    Centralised here so each handler respects the same opt-in rules.
+    """
+    if not getattr(config, "capture_response_body", False):
+        return None
+    min_status = int(getattr(config, "capture_response_body_min_status", 400) or 0)
+    if status_code < min_status:
+        return None
+    return payload
+
+
 # Key used by BodyCacheMiddleware to store raw bytes in the request scope.
 # All Request objects for the same HTTP transaction share the same scope dict,
 # so any handler can read this key even after the receive() stream is exhausted.
@@ -88,6 +103,8 @@ def make_http_exception_handler(config: "FlareConfig"):
     async def handler(request: Request, exc: HTTPException) -> JSONResponse:
         from fastapi_flare.queue import push_log
 
+        response_payload = {"detail": exc.detail}
+
         if exc.status_code >= 400:
             level = "ERROR" if exc.status_code >= 500 else "WARNING"
             body = await _request_body(request, config)
@@ -104,12 +121,10 @@ def make_http_exception_handler(config: "FlareConfig"):
                 duration_ms=_duration_ms(request),
                 error=f"HTTPException {exc.status_code}: {exc.detail}",
                 request_body=body,
+                response_body=_capture_response_payload(config, exc.status_code, response_payload),
             )
 
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-        )
+        return JSONResponse(status_code=exc.status_code, content=response_payload)
 
     return handler
 
@@ -126,6 +141,8 @@ def make_generic_exception_handler(config: "FlareConfig"):
         tb_str = "".join(tb_lines)
         body = await _request_body(request, config)
 
+        response_payload = {"detail": "Internal server error"}
+
         await push_log(
             config,
             level="ERROR",
@@ -140,12 +157,10 @@ def make_generic_exception_handler(config: "FlareConfig"):
             error=f"{type(exc).__name__}: {str(exc)}",
             stack_trace=tb_str,
             request_body=body,
+            response_body=_capture_response_payload(config, 500, response_payload),
         )
 
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal server error"},
-        )
+        return JSONResponse(status_code=500, content=response_payload)
 
     return handler
 
@@ -184,6 +199,8 @@ def make_validation_exception_handler(config: "FlareConfig"):
             except Exception:
                 body = body.decode("utf-8", errors="replace")
 
+        response_payload = {"detail": errors}
+
         await push_log(
             config,
             level="WARNING",
@@ -197,11 +214,9 @@ def make_validation_exception_handler(config: "FlareConfig"):
             duration_ms=_duration_ms(request),
             error=error_summary,
             request_body=body,
+            response_body=_capture_response_payload(config, 422, response_payload),
         )
 
-        return JSONResponse(
-            status_code=422,
-            content={"detail": errors},
-        )
+        return JSONResponse(status_code=422, content=response_payload)
 
     return handler

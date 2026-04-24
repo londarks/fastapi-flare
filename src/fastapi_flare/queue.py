@@ -55,6 +55,7 @@ async def push_log(
     stack_trace: Optional[str] = None,
     context: Optional[dict] = None,
     request_body: Optional[Any] = None,
+    response_body: Optional[Any] = None,
 ) -> None:
     """
     Build a sanitized log entry dict and delegate to the active storage backend.
@@ -103,6 +104,11 @@ async def push_log(
                 _mask_sensitive(request_body, sensitive)
                 if isinstance(request_body, dict)
                 else request_body
+            ),
+            "response_body": (
+                _mask_sensitive(response_body, sensitive)
+                if isinstance(response_body, dict)
+                else response_body
             ),
         }
 

@@ -279,6 +279,16 @@ function openDetail(id) {
     html += '</div>';
   }
 
+  /* ── response body ── */
+  if (r.response_body != null) {
+    var respStr = typeof r.response_body === "object"
+      ? JSON.stringify(r.response_body, null, 2)
+      : String(r.response_body);
+    html += detailSection("fa-file-export", "Response Body");
+    html += codeBlock(respStr, "modal-resp-code");
+    html += '</div>';
+  }
+
   document.getElementById("modalBody").innerHTML = html;
   document.getElementById("detailModal").classList.add("open");
 }

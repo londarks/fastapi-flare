@@ -174,6 +174,16 @@ class RequestTrackingMiddleware(BaseHTTPMiddleware):
         if status < 400 and not (status >= 200 and config.track_2xx_requests):
             return response
 
+        # If response-body capture is on, drain the iterator here so we can
+        # snapshot the payload AND re-emit identical bytes to the client.
+        # BaseHTTPMiddleware wraps everything in a _StreamingResponse, so this
+        # is the only reliable way to read the body in a generic handler.
+        captured_response_body: object = None
+        if getattr(config, "capture_response_body", False) and status >= int(
+            getattr(config, "capture_response_body_min_status", 400) or 0
+        ):
+            response, captured_response_body = await _drain_and_rebuild(response, config)
+
         start = getattr(request.state, "start_time", None)
         duration_ms = int((time.monotonic() - start) * 1000) if start is not None else None
         request_id = getattr(request.state, "request_id", None)
@@ -191,13 +201,15 @@ class RequestTrackingMiddleware(BaseHTTPMiddleware):
             "user_agent": request.headers.get("user-agent"),
             "request_headers": dict(request.headers) if config.capture_request_headers else None,
             "request_body": _extract_request_body(request, config),
+            "response_body": captured_response_body,
             "error_id": None,
         }
 
         storage = getattr(config, "storage_instance", None)
         if storage is not None:
-            import asyncio
-            asyncio.create_task(storage.enqueue_request(entry))
+            # enqueue_request swallows its own errors (try/except) so awaiting
+            # inline is safe — the request path stays non-raising.
+            await storage.enqueue_request(entry)
 
         return response
 
@@ -221,3 +233,79 @@ def _extract_request_body(request: Request, config) -> object:
         except Exception:
             pass
     return raw.decode("utf-8", errors="replace")
+
+
+# Content-types we never try to capture (binary / streaming).
+_SKIP_RESP_CT = ("image/", "video/", "audio/", "application/octet-stream",
+                 "application/pdf", "application/zip", "application/x-",
+                 "text/event-stream", "multipart/")
+
+
+async def _drain_and_rebuild(response: Response, config) -> tuple[Response, object]:
+    """Consume ``response.body_iterator``, snapshot a parsed sample, and return
+    a new Response with the same bytes so the client sees identical output.
+
+    Never raises — on any failure returns the original response and ``None``
+    (the original iterator may have been partially consumed — the caller
+    should account for that).
+    """
+    try:
+        max_bytes = int(getattr(config, "max_response_body_bytes", 0) or 0)
+        if max_bytes <= 0:
+            return response, None
+
+        ct = (response.headers.get("content-type") or "").lower()
+        skip_parse = any(ct.startswith(p) for p in _SKIP_RESP_CT)
+
+        chunks: list[bytes] = []
+        iterator = getattr(response, "body_iterator", None)
+        if iterator is None:
+            body_bytes = getattr(response, "body", b"") or b""
+        else:
+            async for chunk in iterator:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                chunks.append(chunk)
+            body_bytes = b"".join(chunks)
+
+        # Rebuild a plain Response so downstream ASGI re-emits the bytes.
+        # We pass raw_headers (list of (bytes, bytes) tuples) to avoid any
+        # header-dict coercion issues that vary between Starlette versions.
+        raw_headers = list(getattr(response, "raw_headers", []))
+        # Drop any content-length from the original stream — Response recomputes.
+        raw_headers = [(k, v) for (k, v) in raw_headers if k.lower() != b"content-length"]
+        new_response = Response(
+            content=body_bytes,
+            status_code=response.status_code,
+            media_type=response.media_type,
+        )
+        # Replace default headers with the original set (minus content-length)
+        if raw_headers:
+            # Keep the content-length the new Response computed for body_bytes,
+            # then add all original headers that weren't content-length.
+            cl = new_response.headers.get("content-length")
+            for k, v in raw_headers:
+                new_response.headers.append(k.decode("latin-1"), v.decode("latin-1"))
+            if cl is not None:
+                # ensure exactly one content-length header
+                new_response.headers["content-length"] = cl
+
+        if skip_parse or not body_bytes:
+            return new_response, None
+
+        raw = body_bytes[:max_bytes]
+        parsed: object
+        if "json" in ct:
+            try:
+                import json as _json
+                parsed = _json.loads(raw)
+            except Exception:
+                parsed = raw.decode("utf-8", errors="replace")
+        else:
+            parsed = raw.decode("utf-8", errors="replace")
+
+        return new_response, parsed
+
+    except Exception:  # noqa: BLE001
+        # Capture failures never break the request path.
+        return response, None

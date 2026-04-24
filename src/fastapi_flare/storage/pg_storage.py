@@ -69,11 +69,13 @@ CREATE TABLE IF NOT EXISTS {table} (
     error             TEXT,
     stack_trace       TEXT,
     context           JSONB,
-    request_body      JSONB
+    request_body      JSONB,
+    response_body     JSONB
 );
 
--- Migration: add issue_fingerprint to existing deployments
+-- Migration: add columns that may be missing from older deployments
 ALTER TABLE {table} ADD COLUMN IF NOT EXISTS issue_fingerprint TEXT;
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS response_body JSONB;
 
 -- Single-column indexes for basic filtering and ORDER BY
 CREATE INDEX IF NOT EXISTS idx_{table}_timestamp  ON {table} (timestamp DESC);
@@ -150,8 +152,12 @@ CREATE TABLE IF NOT EXISTS {table} (
     user_agent      TEXT,
     request_headers JSONB,
     request_body    JSONB,
+    response_body   JSONB,
     error_id        TEXT
 );
+
+-- Migration: add response_body to existing deployments
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS response_body JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_{table}_timestamp   ON {table} (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_{table}_status_code ON {table} (status_code);
@@ -256,8 +262,13 @@ class PostgreSQLStorage:
 
             ctx = entry_dict.get("context")
             body = entry_dict.get("request_body")
+            resp = entry_dict.get("response_body")
             ctx_val = json.dumps(ctx, default=str) if isinstance(ctx, (dict, list)) else None
             body_val = json.dumps(body, default=str) if isinstance(body, (dict, list)) else None
+            resp_val = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else None
+            # Plain strings are allowed — non-JSON response captures store as text
+            if resp_val is None and isinstance(resp, str) and resp:
+                resp_val = json.dumps(resp)
 
             # asyncpg accepts datetime objects for TIMESTAMPTZ columns directly.
             ts_raw = entry_dict.get("timestamp")
@@ -278,12 +289,12 @@ class PostgreSQLStorage:
                         timestamp, level, event, message, endpoint,
                         http_method, http_status, duration_ms, request_id,
                         issue_fingerprint,
-                        ip_address, error, stack_trace, context, request_body
+                        ip_address, error, stack_trace, context, request_body, response_body
                     ) VALUES (
                         $1, $2, $3, $4, $5,
                         $6, $7, $8, $9,
                         $10,
-                        $11, $12, $13, $14::jsonb, $15::jsonb
+                        $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb
                     )
                     """,
                     ts,
@@ -301,6 +312,7 @@ class PostgreSQLStorage:
                     entry_dict.get("stack_trace"),
                     ctx_val,
                     body_val,
+                    resp_val,
                 )
         except Exception:  # noqa: BLE001
             pass
@@ -349,6 +361,21 @@ class PostgreSQLStorage:
                     """,
                     config.max_entries,
                 )
+                # Response body null-out: drop the large payload after its TTL
+                # while keeping the row for metrics / drill-down context.
+                rb_hours = getattr(config, "response_body_retention_hours", 24)
+                if rb_hours > 0:
+                    rb_cutoff = now - timedelta(hours=rb_hours)
+                    await conn.execute(
+                        f"UPDATE {self._table} SET response_body = NULL"
+                        f" WHERE timestamp < $1 AND response_body IS NOT NULL",
+                        rb_cutoff,
+                    )
+                    await conn.execute(
+                        f"UPDATE {self._requests_table} SET response_body = NULL"
+                        f" WHERE timestamp < $1 AND response_body IS NOT NULL",
+                        rb_cutoff,
+                    )
 
             self._last_retention_at = now
         except Exception:  # noqa: BLE001
@@ -434,8 +461,12 @@ class PostgreSQLStorage:
 
             headers = entry_dict.get("request_headers")
             body = entry_dict.get("request_body")
+            resp = entry_dict.get("response_body")
             headers_val = json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else None
             body_val = json.dumps(body, default=str) if isinstance(body, (dict, list)) else None
+            resp_val = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else None
+            if resp_val is None and isinstance(resp, str) and resp:
+                resp_val = json.dumps(resp)
 
             async with pool.acquire() as conn:
                 async with conn.transaction():
@@ -444,11 +475,11 @@ class PostgreSQLStorage:
                         INSERT INTO {self._requests_table} (
                             timestamp, method, path, status_code, duration_ms,
                             request_id, ip_address, user_agent,
-                            request_headers, request_body, error_id
+                            request_headers, request_body, response_body, error_id
                         ) VALUES (
                             $1, $2, $3, $4, $5,
                             $6, $7, $8,
-                            $9::jsonb, $10::jsonb, $11
+                            $9::jsonb, $10::jsonb, $11::jsonb, $12
                         )
                         """,
                         ts,
@@ -461,6 +492,7 @@ class PostgreSQLStorage:
                         entry_dict.get("user_agent"),
                         headers_val,
                         body_val,
+                        resp_val,
                         entry_dict.get("error_id"),
                     )
                     # Ring-buffer enforcement: keep only the newest N rows
@@ -1008,6 +1040,13 @@ def _row_to_request_entry(row: Any) -> FlareRequestEntry:
         except Exception:
             pass
 
+    resp = row["response_body"] if "response_body" in row.keys() else None
+    if isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except Exception:
+            pass
+
     return FlareRequestEntry(
         id=str(row["id"]),
         timestamp=row["timestamp"],
@@ -1020,6 +1059,7 @@ def _row_to_request_entry(row: Any) -> FlareRequestEntry:
         user_agent=row["user_agent"],
         request_headers=headers,
         request_body=body,
+        response_body=resp,
         error_id=row["error_id"],
     )
 
@@ -1059,6 +1099,12 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
             pass
 
     fp = row["issue_fingerprint"] if "issue_fingerprint" in row.keys() else None
+    resp = row["response_body"] if "response_body" in row.keys() else None
+    if isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except Exception:
+            pass
     return FlareLogEntry(
         id=str(row["id"]),
         timestamp=row["timestamp"],
@@ -1076,4 +1122,5 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         stack_trace=row["stack_trace"],
         context=ctx,
         request_body=body,
+        response_body=resp,
     )

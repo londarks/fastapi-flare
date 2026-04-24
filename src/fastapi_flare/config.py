@@ -85,6 +85,39 @@ class FlareConfig(BaseSettings):
     # Set to 0 to disable body capture entirely.
     max_request_body_bytes: int = 8192
 
+    # ── Response body capture ────────────────────────────────────────────────
+    # Opt-in snapshot of what the endpoint RESPONDED with. Useful to debug
+    # "why did the client receive this?" without leaving your observability stack.
+    #
+    # Default: off. Only JSON/text responses are captured; binary / streaming
+    # responses (image/*, video/*, application/octet-stream, text/event-stream,
+    # StreamingResponse, FileResponse) are silently skipped so downloads and SSE
+    # keep working.
+    #
+    # Privacy: values whose key matches ``sensitive_fields`` are redacted before
+    # storage, same as for request bodies.
+    #
+    # Storage cost is bounded by the existing retention mechanisms PLUS an
+    # additional null-out step that drops the payload column after
+    # ``response_body_retention_hours`` — the row itself stays (for metrics),
+    # only the large JSON gets cleared.
+    #
+    # Env: FLARE_CAPTURE_RESPONSE_BODY=true
+    capture_response_body: bool = False
+    # Only capture responses at or above this HTTP status.
+    # Default 400 = errors only (typical debug use case).
+    # Set to 200 to capture every response (higher volume).
+    # Env: FLARE_CAPTURE_RESPONSE_BODY_MIN_STATUS=400
+    capture_response_body_min_status: int = 400
+    # Maximum bytes to store per response body.
+    # Env: FLARE_MAX_RESPONSE_BODY_BYTES=8192
+    max_response_body_bytes: int = 8192
+    # Hours after which the ``response_body`` column is NULLed out (row stays).
+    # Run on the worker's retention cycle. Default 24h — user-controlled short TTL
+    # aligned with the use case of post-mortem debugging only.
+    # Env: FLARE_RESPONSE_BODY_RETENTION_HOURS=24
+    response_body_retention_hours: int = 24
+
     # ── Request tracking (ring buffer) ────────────────────────────────────────
     # Enables the /flare/requests dashboard tab.
     # All 4xx/5xx are always stored. 2xx requests are opt-in via track_2xx_requests.

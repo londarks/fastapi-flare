@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS logs (
     error             TEXT,
     stack_trace       TEXT,
     context           TEXT,
-    request_body      TEXT
+    request_body      TEXT,
+    response_body     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp   ON logs(timestamp);
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS requests (
     user_agent      TEXT,
     request_headers TEXT,
     request_body    TEXT,
+    response_body   TEXT,
     error_id        TEXT
 );
 
@@ -187,6 +189,8 @@ class SQLiteStorage:
         for ddl in (
             "ALTER TABLE logs ADD COLUMN request_body TEXT",
             "ALTER TABLE logs ADD COLUMN issue_fingerprint TEXT",
+            "ALTER TABLE logs ADD COLUMN response_body TEXT",
+            "ALTER TABLE requests ADD COLUMN response_body TEXT",
         ):
             try:
                 await self._db.execute(ddl)
@@ -208,14 +212,15 @@ class SQLiteStorage:
 
             ctx = entry_dict.get("context")
             body = entry_dict.get("request_body")
+            resp = entry_dict.get("response_body")
             await db.execute(
                 """
                 INSERT INTO logs (
                     timestamp, level, event, message, endpoint,
                     http_method, http_status, duration_ms, request_id,
                     issue_fingerprint,
-                    ip_address, error, stack_trace, context, request_body
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ip_address, error, stack_trace, context, request_body, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_dict.get("timestamp"),
@@ -233,6 +238,7 @@ class SQLiteStorage:
                     entry_dict.get("stack_trace"),
                     json.dumps(ctx, default=str) if isinstance(ctx, (dict, list)) else ctx,
                     json.dumps(body, default=str) if isinstance(body, (dict, list)) else body,
+                    json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else resp,
                 ),
             )
             await db.commit()
@@ -277,6 +283,22 @@ class SQLiteStorage:
                 """,
                 (config.max_entries,),
             )
+
+            # Response body null-out: drop the large payload after its TTL
+            # while keeping the row for metrics / drill-down context.
+            rb_hours = getattr(config, "response_body_retention_hours", 24)
+            if rb_hours > 0:
+                rb_cutoff = (now - timedelta(hours=rb_hours)).isoformat()
+                await db.execute(
+                    "UPDATE logs SET response_body = NULL"
+                    " WHERE timestamp < ? AND response_body IS NOT NULL",
+                    (rb_cutoff,),
+                )
+                await db.execute(
+                    "UPDATE requests SET response_body = NULL"
+                    " WHERE timestamp < ? AND response_body IS NOT NULL",
+                    (rb_cutoff,),
+                )
 
             await db.commit()
             self._last_retention_at = now
@@ -368,6 +390,7 @@ class SQLiteStorage:
 
             headers = entry_dict.get("request_headers")
             body = entry_dict.get("request_body")
+            resp = entry_dict.get("response_body")
 
             async with db.execute("BEGIN"):
                 await db.execute(
@@ -375,8 +398,8 @@ class SQLiteStorage:
                     INSERT INTO requests (
                         timestamp, method, path, status_code, duration_ms,
                         request_id, ip_address, user_agent,
-                        request_headers, request_body, error_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        request_headers, request_body, response_body, error_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ts,
@@ -389,6 +412,7 @@ class SQLiteStorage:
                         entry_dict.get("user_agent"),
                         json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else headers,
                         json.dumps(body, default=str) if isinstance(body, (dict, list)) else body,
+                        json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else resp,
                         entry_dict.get("error_id"),
                     ),
                 )
@@ -933,6 +957,13 @@ def _row_to_request_entry(row: Any) -> FlareRequestEntry:
     ts = _parse_dt(row["timestamp"]) or datetime.now(tz=timezone.utc)
     error_id = row["error_id"] if "error_id" in row.keys() else None
 
+    resp = row["response_body"] if "response_body" in row.keys() else None
+    if resp and isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except Exception:
+            pass
+
     return FlareRequestEntry(
         id=str(row["id"]),
         timestamp=ts,
@@ -945,6 +976,7 @@ def _row_to_request_entry(row: Any) -> FlareRequestEntry:
         user_agent=row["user_agent"],
         request_headers=headers,
         request_body=body,
+        response_body=resp,
         error_id=error_id,
     )
 
@@ -967,6 +999,12 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
     ts = _parse_dt(row["timestamp"]) or datetime.now(tz=timezone.utc)
 
     fp = row["issue_fingerprint"] if "issue_fingerprint" in row.keys() else None
+    resp = row["response_body"] if "response_body" in row.keys() else None
+    if resp and isinstance(resp, str):
+        try:
+            resp = json.loads(resp)
+        except Exception:
+            pass
 
     return FlareLogEntry(
         id=str(row["id"]),
@@ -985,6 +1023,7 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         stack_trace=row["stack_trace"],
         context=ctx,
         request_body=body,
+        response_body=resp,
     )
 
 
