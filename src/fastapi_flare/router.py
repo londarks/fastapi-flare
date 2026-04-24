@@ -30,6 +30,10 @@ from fastapi_flare.schema import (
     FlareChannelSettings,
     FlareEndpointMetric,
     FlareHealthReport,
+    FlareIssueDetail,
+    FlareIssuePage,
+    FlareIssueStats,
+    FlareIssueStatusRequest,
     FlareLogPage,
     FlareMetricsSnapshot,
     FlareNotificationPrefs,
@@ -56,6 +60,7 @@ def make_router(config) -> APIRouter:
     router = APIRouter(prefix=config.dashboard_path, include_in_schema=False)
 
     _errors_path   = config.dashboard_path + "/errors"
+    _issues_path   = config.dashboard_path + "/issues"
     _metrics_path  = config.dashboard_path + "/metrics"
     _storage_path  = config.dashboard_path + "/storage"
     _settings_path = config.dashboard_path + "/settings"
@@ -221,6 +226,7 @@ def make_router(config) -> APIRouter:
                 "title":         config.dashboard_title,
                 "api_base":      _api_base,
                 "errors_path":   _errors_path,
+                "issues_path":   _issues_path,
                 "metrics_path":  _metrics_path,
                 "storage_path":  _storage_path,
                 "settings_path": _settings_path,
@@ -251,6 +257,12 @@ def make_router(config) -> APIRouter:
             if not await _ensure_valid_session(request):
                 return RedirectResponse(url=f"{_login_path}?return_to={_errors_path}", status_code=302)
             return _templates.TemplateResponse(request=request, name="errors.html",  context=_base_ctx("errors",  request))
+
+        @router.get("/issues")
+        async def issues_dashboard_auth(request: Request):
+            if not await _ensure_valid_session(request):
+                return RedirectResponse(url=f"{_login_path}?return_to={_issues_path}", status_code=302)
+            return _templates.TemplateResponse(request=request, name="issues.html",  context=_base_ctx("issues",  request))
 
         @router.get("/metrics")
         async def metrics_dashboard(request: Request):
@@ -342,6 +354,7 @@ def make_router(config) -> APIRouter:
         _admin_ctx_base = {
             "api_base":      _api_base,
             "errors_path":   _errors_path,
+            "issues_path":   _issues_path,
             "metrics_path":  _metrics_path,
             "storage_path":  _storage_path,
             "settings_path": _settings_path,
@@ -360,6 +373,10 @@ def make_router(config) -> APIRouter:
         @router.get("/errors", dependencies=deps)
         async def errors_dashboard(request: Request):
             return _templates.TemplateResponse(request=request, name="errors.html",  context=_admin_ctx("errors"))
+
+        @router.get("/issues", dependencies=deps)
+        async def issues_dashboard(request: Request):
+            return _templates.TemplateResponse(request=request, name="issues.html",  context=_admin_ctx("issues"))
 
         @router.get("/metrics", dependencies=deps)
         async def metrics_dashboard(request: Request):
@@ -457,6 +474,65 @@ def make_router(config) -> APIRouter:
             worker_count=worker_count,
             worker_ids=worker_ids,
         )
+
+    # ── Issues ─────────────────────────────────────────────────────────────
+
+    @router.get("/api/issues", dependencies=api_deps)
+    async def get_issues(
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=500),
+        resolved: Optional[bool] = Query(None),
+        search: Optional[str] = Query(None),
+    ) -> FlareIssuePage:
+        storage = config.storage_instance
+        if storage is None:
+            return FlareIssuePage(issues=[], total=0, page=page, limit=limit, pages=0)
+        issues, total = await storage.list_issues(
+            page=page, limit=limit, resolved=resolved, search=search,
+        )
+        pages = max(1, (total + limit - 1) // limit)
+        return FlareIssuePage(issues=issues, total=total, page=page, limit=limit, pages=pages)
+
+    @router.get("/api/issues/stats", dependencies=api_deps)
+    async def get_issues_stats() -> FlareIssueStats:
+        storage = config.storage_instance
+        if storage is None:
+            return FlareIssueStats()
+        return await storage.get_issue_stats()
+
+    @router.get("/api/issues/{fingerprint}", dependencies=api_deps)
+    async def get_issue_detail(
+        fingerprint: str,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=500),
+    ) -> FlareIssueDetail:
+        storage = config.storage_instance
+        if storage is None:
+            raise HTTPException(status_code=503, detail="No storage backend configured")
+        issue = await storage.get_issue(fingerprint)
+        if issue is None:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        logs, total = await storage.list_logs_for_issue(
+            fingerprint, page=page, limit=limit,
+        )
+        pages = max(1, (total + limit - 1) // limit)
+        return FlareIssueDetail(
+            issue=issue,
+            occurrences=FlareLogPage(logs=logs, total=total, page=page, limit=limit, pages=pages),
+        )
+
+    @router.patch("/api/issues/{fingerprint}", dependencies=api_deps)
+    async def patch_issue_status(
+        fingerprint: str, body: FlareIssueStatusRequest,
+    ) -> FlareStorageActionResult:
+        storage = config.storage_instance
+        if storage is None:
+            return FlareStorageActionResult(ok=False, action="issue_status", detail="No storage backend configured")
+        updated = await storage.update_issue_status(fingerprint, resolved=body.resolved)
+        if not updated:
+            return FlareStorageActionResult(ok=False, action="issue_status", detail="Issue not found")
+        verb = "resolved" if body.resolved else "reopened"
+        return FlareStorageActionResult(ok=True, action="issue_status", detail=f"Issue {verb}")
 
     @router.post("/api/storage/trim", dependencies=api_deps)
     async def storage_trim() -> FlareStorageActionResult:

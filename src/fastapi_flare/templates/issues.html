@@ -1,0 +1,473 @@
+{%- from "_macros.html" import stat_card, auto_refresh_toggle, table_header,
+         filter_search, filter_actions, modal_overlay,
+         pagination_bar, loading_row -%}
+{% extends "layout.html" %}
+
+{% block header_right %}{{ auto_refresh_toggle("30s") }}{% endblock %}
+
+{% block content %}
+
+  <!-- STATS -->
+  <div class="stats">
+    {{ stat_card("Open",         "statOpen",         "unresolved",      "red") }}
+    {{ stat_card("New (24h)",    "statNew24h",       "first_seen < 24h", "amber") }}
+    {{ stat_card("Resolved (7d)", "statResolved7d",   "last 7 days",     "green") }}
+    {{ stat_card("Total",        "statTotalIssues",  "all issues") }}
+  </div>
+
+  <!-- FILTERS -->
+  <div class="filters">
+    {{ filter_search("searchInput", "Search exception, endpoint or message…", "debounceLoad()") }}
+    <div class="filter-group">
+      <span class="filter-label">Status</span>
+      <div class="level-chips">
+        <button class="chip active" data-resolved=""      onclick="setResolvedChip(this)">All</button>
+        <button class="chip"        data-resolved="false" onclick="setResolvedChip(this)">Open</button>
+        <button class="chip"        data-resolved="true"  onclick="setResolvedChip(this)">Resolved</button>
+      </div>
+    </div>
+    {{ filter_actions("clearFilters", "loadIssues(1)") }}
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-wrapper">
+    {{ table_header("fa-layer-group", "Issues", "tableCount") }}
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:90px">Level</th>
+            <th style="width:210px">Exception</th>
+            <th>Message</th>
+            <th style="width:200px">Endpoint</th>
+            <th style="width:90px">Count</th>
+            <th style="width:140px">Last seen</th>
+            <th style="width:110px">Status</th>
+            <th style="width:30px"></th>
+          </tr>
+        </thead>
+        <tbody id="issuesTableBody">
+          {{ loading_row(8) }}
+        </tbody>
+      </table>
+    </div>
+    {{ pagination_bar("paginationBar", "paginationInfo", "paginationBtns", "paginationRight") }}
+  </div>
+
+  <!-- MODAL -->
+  {% call modal_overlay("modalOverlay", "closeModal") %}
+    <div class="modal-head">
+      <span class="modal-level" id="modalLevel"></span>
+      <span class="modal-event" id="modalEvent"></span>
+      <span class="modal-time"  id="modalTime"></span>
+      <button class="modal-close" onclick="closeModalBtn()">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  {% endcall %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const API_BASE = "{{ api_base }}";
+
+  let currentPage      = 1;
+  let totalPages       = 1;
+  let currentLimit     = 15;
+  let autoRefreshTimer = null;
+  let debounceTimer    = null;
+  let activeResolved   = '';  // "", "false", "true"
+  let activeRow        = null;
+  let currentIssueFp   = null;   // fingerprint shown in modal
+  let currentIssuePage = 1;      // pagination for occurrences
+
+  loadIssues(1);
+  loadStats();
+
+  async function loadStats() {
+    try {
+      const res  = await fetch(`${API_BASE}/issues/stats`);
+      const data = await res.json();
+      setStatFlash('statOpen',         (data.open ?? 0).toLocaleString());
+      setStatFlash('statNew24h',       (data.new_last_24h ?? 0).toLocaleString());
+      setStatFlash('statResolved7d',   (data.resolved_last_7d ?? 0).toLocaleString());
+      setStatFlash('statTotalIssues',  (data.total ?? 0).toLocaleString());
+    } catch (e) { /* non-critical */ }
+  }
+
+  async function loadIssues(page = 1) {
+    currentPage = page;
+    showLoading();
+    const params = new URLSearchParams({ page, limit: currentLimit });
+    if (activeResolved !== '') params.set('resolved', activeResolved);
+    const search = document.getElementById('searchInput').value;
+    if (search) params.set('search', search);
+    try {
+      const res  = await fetch(`${API_BASE}/issues?${params}`);
+      const data = await res.json();
+      renderTable(data);
+    } catch (e) { showError(); }
+  }
+
+  function renderTable(data) {
+    const tbody = document.getElementById('issuesTableBody');
+    totalPages  = data.pages;
+    document.getElementById('tableCount').textContent =
+      `${(data.total ?? 0).toLocaleString()} issues`;
+    if (!data.issues || !data.issues.length) {
+      tbody.innerHTML = `<tr><td colspan="8">
+        <div class="empty-state">
+          <i class="fas fa-circle-check"></i>
+          <p>No issues match the current filters</p>
+        </div></td></tr>`;
+      document.getElementById('paginationBar').style.display = 'none';
+      return;
+    }
+    tbody.innerHTML = data.issues.map(iss => `
+      <tr class="level-${(iss.level||'').toLowerCase()}"
+          data-fp="${esc(iss.fingerprint)}"
+          onclick="openIssueFromRow(this)">
+        <td>${levelBadge(iss.level)}</td>
+        <td class="td-endpoint"><strong>${esc(iss.exception_type || '—')}</strong></td>
+        <td class="td-message">
+          <div class="td-message-text" title="${esc(iss.sample_message||'')}">${esc(iss.sample_message || '—')}</div>
+        </td>
+        <td class="td-endpoint">${esc(iss.endpoint || '—')}</td>
+        <td><span class="badge-event">${(iss.occurrence_count || 0).toLocaleString()}</span></td>
+        <td class="td-time">${formatRelativeDate(iss.last_seen)}</td>
+        <td>${iss.resolved ? resolvedBadge() : openBadge()}</td>
+        <td style="color:var(--gray);font-size:11px"><i class="fas fa-chevron-right"></i></td>
+      </tr>
+    `).join('');
+    renderPagination(data);
+  }
+
+  function renderPagination(data) {
+    const bar   = document.getElementById('paginationBar');
+    const info  = document.getElementById('paginationInfo');
+    const btns  = document.getElementById('paginationBtns');
+    const right = document.getElementById('paginationRight');
+    if (!data.total) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    const from = ((data.page - 1) * data.limit) + 1;
+    const to   = Math.min(data.page * data.limit, data.total);
+    info.textContent  = `${from}–${to} of ${data.total.toLocaleString()}`;
+    right.textContent = `Page ${data.page} of ${data.pages}`;
+    if (!data.pages || data.pages <= 1) { btns.innerHTML = ''; return; }
+    const pages = [];
+    pages.push({ label: '<i class="fas fa-chevron-left"></i>',  page: data.page - 1, disabled: data.page <= 1 });
+    let start = Math.max(1, data.page - 2);
+    let end   = Math.min(data.pages, start + 4);
+    start = Math.max(1, end - 4);
+    if (start > 1) pages.push({ label: '1', page: 1 });
+    if (start > 2) pages.push({ label: '…', page: null });
+    for (let i = start; i <= end; i++) pages.push({ label: i, page: i, active: i === data.page });
+    if (end < data.pages - 1) pages.push({ label: '…', page: null });
+    if (end < data.pages)     pages.push({ label: data.pages, page: data.pages });
+    pages.push({ label: '<i class="fas fa-chevron-right"></i>', page: data.page + 1, disabled: data.page >= data.pages });
+    btns.innerHTML = pages.map(p =>
+      `<button class="pg-btn ${p.active ? 'active' : ''}" ${p.disabled || !p.page ? 'disabled' : ''}
+               onclick="${p.page ? `loadIssues(${p.page})` : ''}">${p.label}</button>`
+    ).join('');
+  }
+
+  // ── ISSUE DETAIL MODAL ────────────────────────────────────────────────────
+  function openIssueFromRow(row) {
+    const fp = row.getAttribute('data-fp');
+    if (!fp) return;
+    if (activeRow) activeRow.classList.remove('row-active');
+    activeRow = row;
+    activeRow.classList.add('row-active');
+    openIssueModal(fp, 1);
+  }
+
+  async function openIssueModal(fp, page) {
+    currentIssueFp   = fp;
+    currentIssuePage = page || 1;
+    document.getElementById('modalEvent').textContent = 'Loading…';
+    document.getElementById('modalLevel').innerHTML   = '';
+    document.getElementById('modalTime').textContent  = '';
+    document.getElementById('modalBody').innerHTML    = '<div class="empty-state"><span class="spinner"></span></div>';
+    document.getElementById('modalOverlay').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    try {
+      const res  = await fetch(`${API_BASE}/issues/${encodeURIComponent(fp)}?page=${page || 1}&limit=25`);
+      if (!res.ok) throw new Error('not found');
+      const data = await res.json();
+      renderIssueDetail(data);
+    } catch (e) {
+      document.getElementById('modalBody').innerHTML =
+        `<div class="empty-state"><i class="fas fa-triangle-exclamation" style="color:var(--red)"></i><p>Failed to load issue.</p></div>`;
+    }
+  }
+
+  function renderIssueDetail(data) {
+    const iss = data.issue;
+    const occ = data.occurrences || { logs: [], total: 0, page: 1, pages: 1 };
+    document.getElementById('modalLevel').innerHTML  = levelBadge(iss.level);
+    document.getElementById('modalEvent').textContent = iss.exception_type || '—';
+    document.getElementById('modalTime').textContent  =
+      `last seen ${formatDate(iss.last_seen)}`;
+
+    const statusBadgeHtml = iss.resolved ? resolvedBadge() : openBadge();
+    const actionBtn = iss.resolved
+      ? `<button class="btn btn-ghost" onclick="setIssueResolved('${esc(iss.fingerprint)}', false)">
+           <i class="fas fa-rotate-left"></i> Reopen
+         </button>`
+      : `<button class="btn btn-red"   onclick="setIssueResolved('${esc(iss.fingerprint)}', true)">
+           <i class="fas fa-check"></i> Resolve
+         </button>`;
+
+    let occRows;
+    if (!occ.logs.length) {
+      occRows = `<tr><td colspan="5"><div class="empty-state"><i class="fas fa-circle-check"></i><p>No occurrences stored (logs may have been purged by retention).</p></div></td></tr>`;
+    } else {
+      occRows = occ.logs.map(l => `
+        <tr class="level-${(l.level||'').toLowerCase()}"
+            data-log='${escAttr(JSON.stringify(l))}'
+            onclick="openErrorFromRow(this)">
+          <td class="td-time">${formatRelativeDate(l.timestamp)}</td>
+          <td>${levelBadge(l.level)}</td>
+          <td class="td-message"><div class="td-message-text">${esc(l.message || '—')}</div></td>
+          <td>${statusHttp(l.http_status)}</td>
+          <td style="color:var(--gray);font-size:11px"><i class="fas fa-chevron-right"></i></td>
+        </tr>`).join('');
+    }
+
+    let occPag = '';
+    if (occ.pages && occ.pages > 1) {
+      const prev = occ.page > 1            ? `openIssueModal('${esc(iss.fingerprint)}', ${occ.page - 1})` : '';
+      const next = occ.page < occ.pages    ? `openIssueModal('${esc(iss.fingerprint)}', ${occ.page + 1})` : '';
+      occPag = `
+        <div class="pagination" style="display:flex;margin-top:10px">
+          <span class="pagination-info">Page ${occ.page} of ${occ.pages} — ${occ.total.toLocaleString()} occurrences</span>
+          <div class="pagination-btns" style="margin-left:auto">
+            <button class="pg-btn" ${prev ? '' : 'disabled'} onclick="${prev}"><i class="fas fa-chevron-left"></i></button>
+            <button class="pg-btn" ${next ? '' : 'disabled'} onclick="${next}"><i class="fas fa-chevron-right"></i></button>
+          </div>
+        </div>`;
+    }
+
+    document.getElementById('modalBody').innerHTML = `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-info-circle"></i> Issue</div>
+        <div class="meta-grid">
+          ${metaItem('Status',         iss.resolved ? 'Resolved' : 'Open')}
+          ${metaItem('Occurrences',    (iss.occurrence_count || 0).toLocaleString())}
+          ${metaItem('First seen',     formatDate(iss.first_seen))}
+          ${metaItem('Last seen',      formatDate(iss.last_seen))}
+          ${metaItem('Endpoint',       iss.endpoint)}
+          ${metaItem('Fingerprint',    iss.fingerprint)}
+        </div>
+      </div>
+      ${iss.sample_message ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-message"></i> Sample message</div>
+        <div class="detail-message">${esc(iss.sample_message)}</div>
+      </div>` : ''}
+      <div class="detail-section">
+        <div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span><i class="fas fa-list-ul"></i> Occurrences (${occ.total.toLocaleString()})</span>
+          <span>${actionBtn}</span>
+        </div>
+        <div class="table-scroll" style="max-height:360px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:130px">Timestamp</th>
+                <th style="width:90px">Level</th>
+                <th>Message</th>
+                <th style="width:70px">HTTP</th>
+                <th style="width:30px"></th>
+              </tr>
+            </thead>
+            <tbody>${occRows}</tbody>
+          </table>
+        </div>
+        ${occPag}
+      </div>
+    `;
+  }
+
+  // ── RESOLVE / REOPEN ──────────────────────────────────────────────────────
+  async function setIssueResolved(fp, resolved) {
+    try {
+      const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(fp)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        showToast(resolved ? 'Issue resolved' : 'Issue reopened',
+                  resolved ? 'fa-check' : 'fa-rotate-left');
+        await openIssueModal(fp, currentIssuePage);
+        loadIssues(currentPage);
+        loadStats();
+      } else {
+        showToast(data.detail || 'Failed to update issue', 'fa-triangle-exclamation');
+      }
+    } catch (e) {
+      showToast('Network error while updating issue', 'fa-triangle-exclamation');
+    }
+  }
+
+  // ── OCCURRENCE DETAIL (reuses modal, swaps body) ──────────────────────────
+  function openErrorFromRow(row) {
+    let log;
+    try { log = JSON.parse(row.getAttribute('data-log')); } catch (e) { return; }
+    renderOccurrence(log);
+  }
+
+  function renderOccurrence(log) {
+    document.getElementById('modalLevel').innerHTML  = levelBadge(log.level);
+    document.getElementById('modalEvent').textContent = log.event || '—';
+    document.getElementById('modalTime').textContent  = formatDate(log.timestamp);
+    const backBtn = `<button class="btn btn-ghost" onclick="openIssueModal('${esc(currentIssueFp)}', ${currentIssuePage})">
+                       <i class="fas fa-arrow-left"></i> Back to issue
+                     </button>`;
+    const body = document.getElementById('modalBody');
+    body.innerHTML = `
+      <div style="margin-bottom:12px">${backBtn}</div>
+      ${log.message ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-message"></i> Message</div>
+        <div class="detail-message">${esc(log.message)}</div>
+      </div>` : ''}
+      ${log.error ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-circle-exclamation"></i> Error</div>
+        <div class="detail-error">${esc(log.error)}</div>
+      </div>` : ''}
+      ${log.stack_trace ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-layer-group"></i> Stack Trace</div>
+        ${codeBlock(esc(log.stack_trace), 'stack')}
+      </div>` : ''}
+      ${log.request_body != null ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-arrow-up-from-bracket"></i> Request Body</div>
+        ${codeBlock(esc(typeof log.request_body === 'object' ? JSON.stringify(log.request_body, null, 2) : String(log.request_body)))}
+      </div>` : ''}
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-info-circle"></i> Request Info</div>
+        <div class="meta-grid">
+          ${metaItem('Request ID',  log.request_id)}
+          ${metaItem('Endpoint',    log.endpoint)}
+          ${metaItem('Method',      log.http_method)}
+          ${metaItem('HTTP Status', log.http_status)}
+          ${metaItem('IP Address',  log.ip_address)}
+          ${metaItem('Duration',    log.duration_ms != null ? log.duration_ms + ' ms' : null)}
+        </div>
+      </div>
+      ${log.context ? `
+      <div class="detail-section">
+        <div class="detail-section-title"><i class="fas fa-brackets-curly"></i> Context</div>
+        ${codeBlock(esc(JSON.stringify(log.context, null, 2)))}
+      </div>` : ''}
+    `;
+  }
+
+  function closeModal(e) { if (e.target === document.getElementById('modalOverlay')) closeModalBtn(); }
+  function closeModalBtn() {
+    document.getElementById('modalOverlay').classList.remove('open');
+    document.body.style.overflow = '';
+    currentIssueFp = null;
+    if (activeRow) { activeRow.classList.remove('row-active'); activeRow = null; }
+  }
+
+  // ── AUTO REFRESH ──────────────────────────────────────────────────────────
+  function toggleAutoRefresh(on) {
+    const dot   = document.getElementById('liveDot');
+    const label = document.getElementById('refreshLabel');
+    clearInterval(autoRefreshTimer);
+    if (on) {
+      dot.classList.remove('off');
+      label.textContent = 'Live';
+      autoRefreshTimer = setInterval(() => { loadIssues(currentPage); loadStats(); }, 30000);
+    } else {
+      dot.classList.add('off');
+      label.textContent = 'Auto-refresh';
+    }
+  }
+
+  // ── HELPERS ────────────────────────────────────────────────────────────────
+  function debounceLoad() { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => loadIssues(1), 400); }
+  function clearFilters() {
+    document.getElementById('searchInput').value = '';
+    activeResolved = '';
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    const allChip = document.querySelector('.chip[data-resolved=""]');
+    if (allChip) allChip.classList.add('active');
+    loadIssues(1);
+  }
+  function setResolvedChip(btn) {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    activeResolved = btn.dataset.resolved;
+    loadIssues(1);
+  }
+  function showLoading() {
+    const skel = (w) => `<div class="skel" style="width:${w}"></div>`;
+    const skRow = () => `<tr>
+      <td>${skel('52px')}</td>
+      <td>${skel('120px')}</td>
+      <td class="td-message">${skel('200px')}</td>
+      <td class="td-endpoint">${skel('130px')}</td>
+      <td>${skel('40px')}</td>
+      <td class="td-time">${skel('80px')}</td>
+      <td>${skel('60px')}</td>
+      <td></td>
+    </tr>`;
+    document.getElementById('issuesTableBody').innerHTML = Array(6).fill(0).map(skRow).join('');
+  }
+  function showError() {
+    document.getElementById('issuesTableBody').innerHTML =
+      `<tr><td colspan="8"><div class="empty-state">
+        <i class="fas fa-triangle-exclamation" style="color:var(--red)"></i>
+        <p>Failed to load issues.</p>
+      </div></td></tr>`;
+  }
+  function levelBadge(level) {
+    if (!level) return '';
+    const l    = level.toLowerCase();
+    const icon = l === 'error' ? 'fa-circle-xmark' : 'fa-triangle-exclamation';
+    return `<span class="badge-level ${l}"><i class="fas ${icon}"></i>${level}</span>`;
+  }
+  function openBadge()     { return `<span class="badge-level error"><i class="fas fa-circle"></i>OPEN</span>`; }
+  function resolvedBadge() { return `<span class="badge-level warning" style="color:var(--green);border-color:var(--green)"><i class="fas fa-check"></i>RESOLVED</span>`; }
+  function statusHttp(status) {
+    if (!status) return '<span style="color:var(--gray)">—</span>';
+    const color = status >= 500 ? 'var(--red-light)' : 'var(--amber)';
+    return `<span style="color:${color}; font-family:var(--mono); font-size:12px">${status}</span>`;
+  }
+  function metaItem(key, val) {
+    return `<div class="meta-item">
+      <div class="meta-key">${esc(key)}</div>
+      <div class="meta-val ${!val ? 'none' : ''}">${val ? esc(String(val)) : 'N/A'}</div>
+    </div>`;
+  }
+  function formatDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+  }
+  function esc(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function escAttr(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;');
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModalBtn();
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      const s = document.getElementById('searchInput');
+      if (s) { s.focus(); s.select(); }
+    }
+  });
+</script>
+{% endblock %}

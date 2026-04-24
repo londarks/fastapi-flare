@@ -34,7 +34,14 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi_flare.schema import FlareLogEntry, FlareRequestEntry, FlareRequestStats, FlareStats
+from fastapi_flare.schema import (
+    FlareIssue,
+    FlareIssueStats,
+    FlareLogEntry,
+    FlareRequestEntry,
+    FlareRequestStats,
+    FlareStats,
+)
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
@@ -46,23 +53,27 @@ def _build_ddl(table: str) -> str:
     """Generate CREATE TABLE + indexes DDL for the given table name."""
     return f"""
 CREATE TABLE IF NOT EXISTS {table} (
-    id           BIGSERIAL    PRIMARY KEY,
-    entry_id     TEXT         NOT NULL DEFAULT '',
-    timestamp    TIMESTAMPTZ  NOT NULL,
-    level        TEXT         NOT NULL,
-    event        TEXT         NOT NULL,
-    message      TEXT         NOT NULL DEFAULT '',
-    endpoint     TEXT,
-    http_method  TEXT,
-    http_status  INTEGER,
-    duration_ms  INTEGER,
-    request_id   TEXT,
-    ip_address   TEXT,
-    error        TEXT,
-    stack_trace  TEXT,
-    context      JSONB,
-    request_body JSONB
+    id                BIGSERIAL    PRIMARY KEY,
+    entry_id          TEXT         NOT NULL DEFAULT '',
+    timestamp         TIMESTAMPTZ  NOT NULL,
+    level             TEXT         NOT NULL,
+    event             TEXT         NOT NULL,
+    message           TEXT         NOT NULL DEFAULT '',
+    endpoint          TEXT,
+    http_method       TEXT,
+    http_status       INTEGER,
+    duration_ms       INTEGER,
+    request_id        TEXT,
+    issue_fingerprint TEXT,
+    ip_address        TEXT,
+    error             TEXT,
+    stack_trace       TEXT,
+    context           JSONB,
+    request_body      JSONB
 );
+
+-- Migration: add issue_fingerprint to existing deployments
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS issue_fingerprint TEXT;
 
 -- Single-column indexes for basic filtering and ORDER BY
 CREATE INDEX IF NOT EXISTS idx_{table}_timestamp  ON {table} (timestamp DESC);
@@ -70,10 +81,33 @@ CREATE INDEX IF NOT EXISTS idx_{table}_level      ON {table} (level);
 CREATE INDEX IF NOT EXISTS idx_{table}_endpoint   ON {table} (endpoint);
 CREATE INDEX IF NOT EXISTS idx_{table}_event      ON {table} (event);
 CREATE INDEX IF NOT EXISTS idx_{table}_http_status ON {table} (http_status);
+CREATE INDEX IF NOT EXISTS idx_{table}_issue_fp   ON {table} (issue_fingerprint, timestamp DESC);
 
 -- Composite index: covers get_stats queries (level filter + time range in one scan)
 -- e.g. COUNT(*) FILTER (WHERE level = 'ERROR' AND timestamp > $1)
 CREATE INDEX IF NOT EXISTS idx_{table}_level_ts   ON {table} (level, timestamp DESC);
+"""
+
+
+def _build_issues_ddl(table: str) -> str:
+    """Generate CREATE TABLE + indexes DDL for the grouped-issues store."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    fingerprint       TEXT        PRIMARY KEY,
+    exception_type    TEXT,
+    endpoint          TEXT,
+    sample_message    TEXT        NOT NULL DEFAULT '',
+    sample_request_id TEXT,
+    occurrence_count  BIGINT      NOT NULL DEFAULT 1,
+    first_seen        TIMESTAMPTZ NOT NULL,
+    last_seen         TIMESTAMPTZ NOT NULL,
+    level             TEXT        NOT NULL,
+    resolved          BOOLEAN     NOT NULL DEFAULT FALSE,
+    resolved_at       TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_{table}_last_seen          ON {table} (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_{table}_resolved_last_seen ON {table} (resolved, last_seen DESC);
 """
 
 
@@ -173,6 +207,12 @@ class PostgreSQLStorage:
         base = self._table
         return base.replace("_logs", "_metrics") if "_logs" in base else base + "_metrics"
 
+    @property
+    def _issues_table(self) -> str:
+        """Derived issues table, e.g. ``flare_logs`` → ``flare_issues``."""
+        base = self._table
+        return base.replace("_logs", "_issues") if "_logs" in base else base + "_issues"
+
     # ── Lazy pool init ────────────────────────────────────────────────────────
 
     async def _ensure_pool(self) -> Any:
@@ -200,6 +240,7 @@ class PostgreSQLStorage:
             await conn.execute(_build_requests_ddl(self._requests_table))
             await conn.execute(_build_settings_ddl(self._settings_table))
             await conn.execute(_build_metrics_ddl(self._metrics_table))
+            await conn.execute(_build_issues_ddl(self._issues_table))
 
         return self._pool
 
@@ -236,11 +277,13 @@ class PostgreSQLStorage:
                     INSERT INTO {self._table} (
                         timestamp, level, event, message, endpoint,
                         http_method, http_status, duration_ms, request_id,
+                        issue_fingerprint,
                         ip_address, error, stack_trace, context, request_body
                     ) VALUES (
                         $1, $2, $3, $4, $5,
                         $6, $7, $8, $9,
-                        $10, $11, $12, $13::jsonb, $14::jsonb
+                        $10,
+                        $11, $12, $13, $14::jsonb, $15::jsonb
                     )
                     """,
                     ts,
@@ -252,6 +295,7 @@ class PostgreSQLStorage:
                     entry_dict.get("http_status"),
                     entry_dict.get("duration_ms"),
                     entry_dict.get("request_id"),
+                    entry_dict.get("issue_fingerprint"),
                     entry_dict.get("ip_address"),
                     entry_dict.get("error"),
                     entry_dict.get("stack_trace"),
@@ -679,6 +723,206 @@ class PostgreSQLStorage:
         except Exception:
             return [], 0
 
+    # ── Issue grouping ─────────────────────────────────────────────────────
+
+    async def upsert_issue(
+        self,
+        *,
+        fingerprint: str,
+        exception_type: Optional[str],
+        endpoint: Optional[str],
+        sample_message: str,
+        sample_request_id: Optional[str],
+        level: str,
+        timestamp: datetime,
+    ) -> None:
+        try:
+            pool = await self._ensure_pool()
+            tbl = self._issues_table
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"""
+                    INSERT INTO {tbl} (
+                        fingerprint, exception_type, endpoint,
+                        sample_message, sample_request_id,
+                        occurrence_count, first_seen, last_seen,
+                        level, resolved, resolved_at
+                    ) VALUES ($1, $2, $3, $4, $5, 1, $6, $6, $7, FALSE, NULL)
+                    ON CONFLICT (fingerprint) DO UPDATE SET
+                        occurrence_count = {tbl}.occurrence_count + 1,
+                        last_seen = GREATEST({tbl}.last_seen, EXCLUDED.last_seen),
+                        level = CASE
+                            WHEN EXCLUDED.level = 'ERROR' THEN 'ERROR'
+                            ELSE {tbl}.level
+                        END,
+                        resolved = FALSE,
+                        resolved_at = NULL
+                    """,
+                    fingerprint,
+                    exception_type,
+                    endpoint,
+                    (sample_message or "")[:500],
+                    sample_request_id,
+                    timestamp,
+                    level,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def list_issues(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        resolved: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> tuple[list[FlareIssue], int]:
+        try:
+            pool = await self._ensure_pool()
+        except Exception:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        idx = 1
+        if resolved is not None:
+            clauses.append(f"resolved = ${idx}")
+            params.append(resolved)
+            idx += 1
+        if search:
+            clauses.append(
+                f"(exception_type ILIKE ${idx} OR endpoint ILIKE ${idx + 1} OR sample_message ILIKE ${idx + 2})"
+            )
+            params.extend([f"%{search}%"] * 3)
+            idx += 3
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        offset = (page - 1) * limit
+        tbl = self._issues_table
+
+        try:
+            async with pool.acquire() as conn:
+                total: int = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM {tbl} {where}", *params
+                ) or 0
+                rows = await conn.fetch(
+                    f"""
+                    SELECT * FROM {tbl} {where}
+                    ORDER BY last_seen DESC
+                    LIMIT ${idx} OFFSET ${idx + 1}
+                    """,
+                    *params,
+                    limit,
+                    offset,
+                )
+            return [_row_to_issue(r) for r in rows], total
+        except Exception:
+            return [], 0
+
+    async def get_issue(self, fingerprint: str) -> Optional[FlareIssue]:
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT * FROM {self._issues_table} WHERE fingerprint = $1",
+                    fingerprint,
+                )
+            return _row_to_issue(row) if row else None
+        except Exception:
+            return None
+
+    async def list_logs_for_issue(
+        self,
+        fingerprint: str,
+        *,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[FlareLogEntry], int]:
+        try:
+            pool = await self._ensure_pool()
+        except Exception:
+            return [], 0
+
+        offset = (page - 1) * limit
+        try:
+            async with pool.acquire() as conn:
+                total: int = await conn.fetchval(
+                    f"SELECT COUNT(*) FROM {self._table} WHERE issue_fingerprint = $1",
+                    fingerprint,
+                ) or 0
+                rows = await conn.fetch(
+                    f"""
+                    SELECT * FROM {self._table}
+                    WHERE issue_fingerprint = $1
+                    ORDER BY timestamp DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    fingerprint,
+                    limit,
+                    offset,
+                )
+            return [_row_to_entry(r) for r in rows], total
+        except Exception:
+            return [], 0
+
+    async def update_issue_status(
+        self, fingerprint: str, *, resolved: bool
+    ) -> bool:
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                result = await conn.execute(
+                    f"""
+                    UPDATE {self._issues_table}
+                    SET resolved = $2,
+                        resolved_at = CASE WHEN $2 THEN NOW() ELSE NULL END
+                    WHERE fingerprint = $1
+                    """,
+                    fingerprint,
+                    resolved,
+                )
+            # asyncpg returns a command tag like "UPDATE 1"
+            try:
+                return int(result.rsplit(" ", 1)[-1]) > 0
+            except (ValueError, IndexError):
+                return False
+        except Exception:
+            return False
+
+    async def get_issue_stats(self) -> FlareIssueStats:
+        try:
+            pool = await self._ensure_pool()
+        except Exception:
+            return FlareIssueStats()
+
+        try:
+            cutoff_24h = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            cutoff_7d = datetime.now(tz=timezone.utc) - timedelta(days=7)
+            tbl = self._issues_table
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT
+                        COUNT(*)                                                       AS total,
+                        COUNT(*) FILTER (WHERE NOT resolved)                            AS open,
+                        COUNT(*) FILTER (WHERE resolved)                                AS resolved,
+                        COUNT(*) FILTER (WHERE first_seen > $1)                         AS new_24h,
+                        COUNT(*) FILTER (WHERE resolved AND resolved_at > $2)           AS resolved_7d
+                    FROM {tbl}
+                    """,
+                    cutoff_24h,
+                    cutoff_7d,
+                )
+            return FlareIssueStats(
+                total=row["total"] or 0,
+                open=row["open"] or 0,
+                resolved=row["resolved"] or 0,
+                new_last_24h=row["new_24h"] or 0,
+                resolved_last_7d=row["resolved_7d"] or 0,
+            )
+        except Exception:
+            return FlareIssueStats()
+
     async def get_stats(self) -> FlareStats:
         """
         Retrieve summary statistics via efficient COUNT queries.
@@ -780,6 +1024,23 @@ def _row_to_request_entry(row: Any) -> FlareRequestEntry:
     )
 
 
+def _row_to_issue(row: Any) -> FlareIssue:
+    """Convert an asyncpg ``Record`` from the issues table to a :class:`FlareIssue`."""
+    return FlareIssue(
+        fingerprint=row["fingerprint"],
+        exception_type=row["exception_type"],
+        endpoint=row["endpoint"],
+        sample_message=row["sample_message"] or "",
+        sample_request_id=row["sample_request_id"],
+        occurrence_count=row["occurrence_count"],
+        first_seen=row["first_seen"],
+        last_seen=row["last_seen"],
+        level=row["level"],
+        resolved=row["resolved"],
+        resolved_at=row["resolved_at"],
+    )
+
+
 def _row_to_entry(row: Any) -> FlareLogEntry:
     """Convert an asyncpg ``Record`` to a :class:`FlareLogEntry`."""
     ctx = row["context"]
@@ -797,6 +1058,7 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         except Exception:
             pass
 
+    fp = row["issue_fingerprint"] if "issue_fingerprint" in row.keys() else None
     return FlareLogEntry(
         id=str(row["id"]),
         timestamp=row["timestamp"],
@@ -804,6 +1066,7 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         event=row["event"],
         message=row["message"] or "",
         request_id=row["request_id"],
+        issue_fingerprint=fp,
         endpoint=row["endpoint"],
         http_method=row["http_method"],
         http_status=row["http_status"],

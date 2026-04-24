@@ -21,6 +21,7 @@ class FlareLogEntry(BaseModel):
     event: str
     message: str
     request_id: Optional[str] = None
+    issue_fingerprint: Optional[str] = None
     endpoint: Optional[str] = None
     http_method: Optional[str] = None
     http_status: Optional[int] = None
@@ -212,3 +213,54 @@ class FlareNotificationTestResult(BaseModel):
     ok: bool
     channel: str
     detail: str = ""
+
+
+class FlareIssue(BaseModel):
+    """One grouped error kind. Many :class:`FlareLogEntry` rows map to one issue."""
+
+    fingerprint: str
+    exception_type: Optional[str] = None
+    endpoint: Optional[str] = None
+    sample_message: str = ""
+    sample_request_id: Optional[str] = None
+    occurrence_count: int
+    first_seen: datetime
+    last_seen: datetime
+    level: Literal["ERROR", "WARNING"]
+    resolved: bool = False
+    resolved_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FlareIssuePage(BaseModel):
+    """Paginated response for GET /flare/api/issues."""
+
+    issues: list[FlareIssue]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
+class FlareIssueDetail(BaseModel):
+    """Issue + paginated list of occurrences for GET /flare/api/issues/{fp}."""
+
+    issue: FlareIssue
+    occurrences: FlareLogPage
+
+
+class FlareIssueStats(BaseModel):
+    """Summary stats for the issues header cards."""
+
+    total: int = 0
+    open: int = 0
+    resolved: int = 0
+    new_last_24h: int = 0
+    resolved_last_7d: int = 0
+
+
+class FlareIssueStatusRequest(BaseModel):
+    """Payload for PATCH /flare/api/issues/{fp}."""
+
+    resolved: bool

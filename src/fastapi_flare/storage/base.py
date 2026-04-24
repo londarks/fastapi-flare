@@ -20,9 +20,18 @@ Adding a new backend
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Protocol, runtime_checkable
 
-from fastapi_flare.schema import FlareLogEntry, FlareLogPage, FlareRequestEntry, FlareRequestStats, FlareStats
+from fastapi_flare.schema import (
+    FlareIssue,
+    FlareIssueStats,
+    FlareLogEntry,
+    FlareLogPage,
+    FlareRequestEntry,
+    FlareRequestStats,
+    FlareStats,
+)
 
 
 @runtime_checkable
@@ -208,4 +217,66 @@ class FlareStorageProtocol(Protocol):
             List of ``(worker_id, payload)`` tuples. Stale snapshots from
             crashed workers fall off naturally once *since_seconds* expires.
         """
+        ...
+
+    # ── Issue grouping ────────────────────────────────────────────────────
+
+    async def upsert_issue(
+        self,
+        *,
+        fingerprint: str,
+        exception_type: Optional[str],
+        endpoint: Optional[str],
+        sample_message: str,
+        sample_request_id: Optional[str],
+        level: str,
+        timestamp: datetime,
+    ) -> None:
+        """
+        Register one occurrence of an issue.
+
+        On first write (unknown fingerprint): create the row with
+        ``occurrence_count = 1`` and ``first_seen == last_seen``.
+        On subsequent writes: ``occurrence_count += 1``, ``last_seen`` moves
+        forward, ``level`` upgrades to ``ERROR`` on any ERROR hit, and a
+        previously resolved issue is reopened (``resolved = False``).
+
+        Must NEVER raise — called from :func:`fastapi_flare.queue.push_log`
+        which must not impact the request path.
+        """
+        ...
+
+    async def list_issues(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        resolved: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> tuple[list[FlareIssue], int]:
+        """Paginated list of issues, newest ``last_seen`` first."""
+        ...
+
+    async def get_issue(self, fingerprint: str) -> Optional[FlareIssue]:
+        """Return one issue by fingerprint, or ``None`` if unknown."""
+        ...
+
+    async def list_logs_for_issue(
+        self,
+        fingerprint: str,
+        *,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[FlareLogEntry], int]:
+        """Paginated list of the underlying log rows for one issue."""
+        ...
+
+    async def update_issue_status(
+        self, fingerprint: str, *, resolved: bool
+    ) -> bool:
+        """Toggle the ``resolved`` flag. Returns True when a row was updated."""
+        ...
+
+    async def get_issue_stats(self) -> FlareIssueStats:
+        """Summary counts used by the Issues tab stat cards."""
         ...

@@ -24,7 +24,14 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi_flare.schema import FlareLogEntry, FlareRequestEntry, FlareRequestStats, FlareStats
+from fastapi_flare.schema import (
+    FlareIssue,
+    FlareIssueStats,
+    FlareLogEntry,
+    FlareRequestEntry,
+    FlareRequestStats,
+    FlareStats,
+)
 
 if TYPE_CHECKING:
     from fastapi_flare.config import FlareConfig
@@ -32,22 +39,23 @@ if TYPE_CHECKING:
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS logs (
-    id          INTEGER  PRIMARY KEY AUTOINCREMENT,
-    entry_id    TEXT     NOT NULL DEFAULT '',
-    timestamp   DATETIME NOT NULL,
-    level       TEXT     NOT NULL,
-    event       TEXT     NOT NULL,
-    message     TEXT     NOT NULL DEFAULT '',
-    endpoint    TEXT,
-    http_method TEXT,
-    http_status INTEGER,
-    duration_ms INTEGER,
-    request_id  TEXT,
-    ip_address  TEXT,
-    error       TEXT,
-    stack_trace TEXT,
-    context     TEXT,
-    request_body TEXT
+    id                INTEGER  PRIMARY KEY AUTOINCREMENT,
+    entry_id          TEXT     NOT NULL DEFAULT '',
+    timestamp         DATETIME NOT NULL,
+    level             TEXT     NOT NULL,
+    event             TEXT     NOT NULL,
+    message           TEXT     NOT NULL DEFAULT '',
+    endpoint          TEXT,
+    http_method       TEXT,
+    http_status       INTEGER,
+    duration_ms       INTEGER,
+    request_id        TEXT,
+    issue_fingerprint TEXT,
+    ip_address        TEXT,
+    error             TEXT,
+    stack_trace       TEXT,
+    context           TEXT,
+    request_body      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp   ON logs(timestamp);
@@ -55,8 +63,31 @@ CREATE INDEX IF NOT EXISTS idx_logs_level       ON logs(level);
 CREATE INDEX IF NOT EXISTS idx_logs_endpoint    ON logs(endpoint);
 CREATE INDEX IF NOT EXISTS idx_logs_event       ON logs(event);
 CREATE INDEX IF NOT EXISTS idx_logs_http_status ON logs(http_status);
+CREATE INDEX IF NOT EXISTS idx_logs_issue_fp    ON logs(issue_fingerprint, timestamp DESC);
 -- Composite: covers level filter + time range in the same scan (used by get_stats)
 CREATE INDEX IF NOT EXISTS idx_logs_level_ts    ON logs(level, timestamp DESC);
+"""
+
+
+_ISSUES_DDL = """
+CREATE TABLE IF NOT EXISTS flare_issues (
+    fingerprint       TEXT PRIMARY KEY,
+    exception_type    TEXT,
+    endpoint          TEXT,
+    sample_message    TEXT    NOT NULL DEFAULT '',
+    sample_request_id TEXT,
+    occurrence_count  INTEGER NOT NULL DEFAULT 1,
+    first_seen        DATETIME NOT NULL,
+    last_seen         DATETIME NOT NULL,
+    level             TEXT    NOT NULL,
+    resolved          INTEGER NOT NULL DEFAULT 0,
+    resolved_at       DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_flare_issues_last_seen
+    ON flare_issues(last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_flare_issues_resolved_last_seen
+    ON flare_issues(resolved, last_seen DESC);
 """
 
 
@@ -147,16 +178,21 @@ class SQLiteStorage:
         await self._db.executescript(_REQUESTS_DDL)
         await self._db.executescript(_SETTINGS_DDL)
         await self._db.executescript(_METRICS_DDL)
+        await self._db.executescript(_ISSUES_DDL)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.commit()
 
-        # Migration: add request_body column to existing databases
-        try:
-            await self._db.execute("ALTER TABLE logs ADD COLUMN request_body TEXT")
-            await self._db.commit()
-        except Exception:
-            pass  # column already exists
+        # Migration: add columns that may be missing from older databases
+        for ddl in (
+            "ALTER TABLE logs ADD COLUMN request_body TEXT",
+            "ALTER TABLE logs ADD COLUMN issue_fingerprint TEXT",
+        ):
+            try:
+                await self._db.execute(ddl)
+                await self._db.commit()
+            except Exception:
+                pass  # column already exists
 
         return self._db
 
@@ -177,8 +213,9 @@ class SQLiteStorage:
                 INSERT INTO logs (
                     timestamp, level, event, message, endpoint,
                     http_method, http_status, duration_ms, request_id,
+                    issue_fingerprint,
                     ip_address, error, stack_trace, context, request_body
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_dict.get("timestamp"),
@@ -190,6 +227,7 @@ class SQLiteStorage:
                     entry_dict.get("http_status"),
                     entry_dict.get("duration_ms"),
                     entry_dict.get("request_id"),
+                    entry_dict.get("issue_fingerprint"),
                     entry_dict.get("ip_address"),
                     entry_dict.get("error"),
                     entry_dict.get("stack_trace"),
@@ -555,6 +593,198 @@ class SQLiteStorage:
         except Exception:
             return []
 
+    # ── Issue grouping ──────────────────────────────────────────────────
+
+    async def upsert_issue(
+        self,
+        *,
+        fingerprint: str,
+        exception_type: Optional[str],
+        endpoint: Optional[str],
+        sample_message: str,
+        sample_request_id: Optional[str],
+        level: str,
+        timestamp: datetime,
+    ) -> None:
+        try:
+            db = await self._ensure_db()
+            ts_iso = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+            sample = (sample_message or "")[:500]
+            await db.execute(
+                """
+                INSERT INTO flare_issues (
+                    fingerprint, exception_type, endpoint,
+                    sample_message, sample_request_id,
+                    occurrence_count, first_seen, last_seen,
+                    level, resolved, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 0, NULL)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    occurrence_count = occurrence_count + 1,
+                    last_seen = MAX(last_seen, excluded.last_seen),
+                    level = CASE
+                        WHEN excluded.level = 'ERROR' THEN 'ERROR'
+                        ELSE flare_issues.level
+                    END,
+                    resolved = 0,
+                    resolved_at = NULL
+                """,
+                (
+                    fingerprint,
+                    exception_type,
+                    endpoint,
+                    sample,
+                    sample_request_id,
+                    ts_iso,
+                    ts_iso,
+                    level,
+                ),
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def list_issues(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        resolved: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> tuple[list[FlareIssue], int]:
+        try:
+            db = await self._ensure_db()
+        except Exception:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if resolved is not None:
+            clauses.append("resolved = ?")
+            params.append(1 if resolved else 0)
+        if search:
+            clauses.append("(COALESCE(exception_type, '') LIKE ? OR COALESCE(endpoint, '') LIKE ? OR sample_message LIKE ?)")
+            params.extend([f"%{search}%"] * 3)
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        try:
+            count_rows = await db.execute_fetchall(
+                f"SELECT COUNT(*) AS cnt FROM flare_issues {where}", params
+            )
+            total = count_rows[0]["cnt"] if count_rows else 0
+
+            offset = (page - 1) * limit
+            rows = await db.execute_fetchall(
+                f"""
+                SELECT * FROM flare_issues {where}
+                ORDER BY last_seen DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, limit, offset],
+            )
+            return [_row_to_issue(r) for r in rows], total
+        except Exception:
+            return [], 0
+
+    async def get_issue(self, fingerprint: str) -> Optional[FlareIssue]:
+        try:
+            db = await self._ensure_db()
+            rows = await db.execute_fetchall(
+                "SELECT * FROM flare_issues WHERE fingerprint = ?", (fingerprint,)
+            )
+            if rows:
+                return _row_to_issue(rows[0])
+        except Exception:
+            pass
+        return None
+
+    async def list_logs_for_issue(
+        self,
+        fingerprint: str,
+        *,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[FlareLogEntry], int]:
+        try:
+            db = await self._ensure_db()
+        except Exception:
+            return [], 0
+
+        try:
+            count_rows = await db.execute_fetchall(
+                "SELECT COUNT(*) AS cnt FROM logs WHERE issue_fingerprint = ?",
+                (fingerprint,),
+            )
+            total = count_rows[0]["cnt"] if count_rows else 0
+
+            offset = (page - 1) * limit
+            rows = await db.execute_fetchall(
+                """
+                SELECT * FROM logs
+                WHERE issue_fingerprint = ?
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+                """,
+                (fingerprint, limit, offset),
+            )
+            return [_row_to_entry(r) for r in rows], total
+        except Exception:
+            return [], 0
+
+    async def update_issue_status(
+        self, fingerprint: str, *, resolved: bool
+    ) -> bool:
+        try:
+            db = await self._ensure_db()
+            now = datetime.now(tz=timezone.utc).isoformat() if resolved else None
+            cur = await db.execute(
+                """
+                UPDATE flare_issues
+                SET resolved = ?,
+                    resolved_at = ?
+                WHERE fingerprint = ?
+                """,
+                (1 if resolved else 0, now, fingerprint),
+            )
+            await db.commit()
+            return (cur.rowcount or 0) > 0
+        except Exception:
+            return False
+
+    async def get_issue_stats(self) -> FlareIssueStats:
+        try:
+            db = await self._ensure_db()
+        except Exception:
+            return FlareIssueStats()
+
+        try:
+            cutoff_24h = (datetime.now(tz=timezone.utc) - timedelta(hours=24)).isoformat()
+            cutoff_7d = (datetime.now(tz=timezone.utc) - timedelta(days=7)).isoformat()
+            rows = await db.execute_fetchall(
+                """
+                SELECT
+                    COUNT(*)                                                         AS total,
+                    SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END)                    AS open,
+                    SUM(CASE WHEN resolved = 1 THEN 1 ELSE 0 END)                    AS resolved_count,
+                    SUM(CASE WHEN first_seen >= ? THEN 1 ELSE 0 END)                  AS new_24h,
+                    SUM(CASE WHEN resolved = 1 AND resolved_at >= ? THEN 1 ELSE 0 END) AS resolved_7d
+                FROM flare_issues
+                """,
+                (cutoff_24h, cutoff_7d),
+            )
+            row = rows[0] if rows else None
+            if not row:
+                return FlareIssueStats()
+            return FlareIssueStats(
+                total=row["total"] or 0,
+                open=row["open"] or 0,
+                resolved=row["resolved_count"] or 0,
+                new_last_24h=row["new_24h"] or 0,
+                resolved_last_7d=row["resolved_7d"] or 0,
+            )
+        except Exception:
+            return FlareIssueStats()
+
     # ── Read path ─────────────────────────────────────────────────────────
 
     async def list_logs(
@@ -736,6 +966,8 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
 
     ts = _parse_dt(row["timestamp"]) or datetime.now(tz=timezone.utc)
 
+    fp = row["issue_fingerprint"] if "issue_fingerprint" in row.keys() else None
+
     return FlareLogEntry(
         id=str(row["id"]),
         timestamp=ts,
@@ -743,6 +975,7 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         event=row["event"],
         message=row["message"] or "",
         request_id=row["request_id"],
+        issue_fingerprint=fp,
         endpoint=row["endpoint"],
         http_method=row["http_method"],
         http_status=row["http_status"],
@@ -752,4 +985,24 @@ def _row_to_entry(row: Any) -> FlareLogEntry:
         stack_trace=row["stack_trace"],
         context=ctx,
         request_body=body,
+    )
+
+
+def _row_to_issue(row: Any) -> FlareIssue:
+    first_seen = _parse_dt(row["first_seen"]) or datetime.now(tz=timezone.utc)
+    last_seen = _parse_dt(row["last_seen"]) or first_seen
+    resolved_at_raw = row["resolved_at"] if "resolved_at" in row.keys() else None
+    resolved_at = _parse_dt(resolved_at_raw) if resolved_at_raw else None
+    return FlareIssue(
+        fingerprint=row["fingerprint"],
+        exception_type=row["exception_type"],
+        endpoint=row["endpoint"],
+        sample_message=row["sample_message"] or "",
+        sample_request_id=row["sample_request_id"],
+        occurrence_count=row["occurrence_count"] or 0,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        level=row["level"],
+        resolved=bool(row["resolved"]),
+        resolved_at=resolved_at,
     )

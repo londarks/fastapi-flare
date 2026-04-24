@@ -72,12 +72,25 @@ async def push_log(
     try:
         sensitive = getattr(config, "sensitive_fields", frozenset())
 
+        from fastapi_flare.fingerprint import compute_fingerprint, _extract_exception_type
+
+        now = datetime.now(tz=timezone.utc)
+        fingerprint = compute_fingerprint(
+            event=event,
+            error=error,
+            stack_trace=stack_trace,
+            endpoint=endpoint,
+            http_status=http_status,
+            message=message,
+        )
+
         entry = {
-            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "timestamp": now.isoformat(),
             "level": level,
             "event": event,
             "message": message,
             "request_id": request_id,
+            "issue_fingerprint": fingerprint,
             "endpoint": endpoint,
             "http_method": http_method,
             "http_status": http_status,
@@ -96,6 +109,18 @@ async def push_log(
         storage = config.storage_instance
         if storage is not None:
             await storage.enqueue(entry)
+            try:
+                await storage.upsert_issue(
+                    fingerprint=fingerprint,
+                    exception_type=_extract_exception_type(error),
+                    endpoint=endpoint,
+                    sample_message=message,
+                    sample_request_id=request_id,
+                    level=level,
+                    timestamp=now,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # issue tracking must never impact the log write
 
         from fastapi_flare.alerting import schedule_notifications
         schedule_notifications(config, level, entry)
