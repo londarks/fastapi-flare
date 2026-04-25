@@ -44,6 +44,7 @@ class FlareWorker:
         self._started_at: Optional[float] = None
         self._worker_id: str = _generate_worker_id()
         self._last_metrics_flush: float = 0.0
+        self._last_request_buffer_flush: float = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -75,6 +76,30 @@ class FlareWorker:
         if storage is None:
             return
         await storage.flush()
+
+    async def _maybe_flush_request_buffer(self) -> None:
+        """Drain the request-tracking in-memory buffer when the interval elapses.
+
+        No-op when ``request_buffer_size`` is 0 (immediate writes) or when there
+        is no storage backend. Never raises.
+        """
+        if int(getattr(self._config, "request_buffer_size", 0) or 0) <= 0:
+            return
+        interval = int(getattr(self._config, "request_buffer_flush_seconds", 2) or 2)
+        now = time.monotonic()
+        if now - self._last_request_buffer_flush < interval:
+            return
+
+        storage = self._config.storage_instance
+        if storage is None:
+            return
+
+        try:
+            await storage.flush_request_buffer()
+        except Exception:
+            pass
+        finally:
+            self._last_request_buffer_flush = now
 
     async def _maybe_flush_metrics(self) -> None:
         """Persist the in-memory metrics snapshot if the interval has elapsed.
@@ -112,6 +137,12 @@ class FlareWorker:
                 raise
             except Exception:
                 pass  # Never crash the loop
+            try:
+                await self._maybe_flush_request_buffer()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
             try:
                 await self._maybe_flush_metrics()
             except asyncio.CancelledError:

@@ -189,6 +189,11 @@ class PostgreSQLStorage:
         self._config = config
         self._pool: Any = None  # asyncpg.Pool, created on first use
         self._last_retention_at: Optional[datetime] = None  # throttle for flush()
+        # In-memory buffer for batched request inserts (only used when
+        # config.request_buffer_size > 0). Drained by flush_request_buffer().
+        self._req_buffer: list[dict] = []
+        # Lazy import — guarded to avoid asyncio.Lock hitting module-level loop
+        self._req_buffer_lock: Any = None
 
     @property
     def _table(self) -> str:
@@ -428,6 +433,12 @@ class PostgreSQLStorage:
 
     async def close(self) -> None:
         """Close all connections in the pool."""
+        # Drain any buffered requests before tearing down the pool.
+        try:
+            if self._req_buffer:
+                await self.flush_request_buffer()
+        except Exception:  # noqa: BLE001
+            pass
         if self._pool is not None:
             try:
                 await self._pool.close()
@@ -442,8 +453,23 @@ class PostgreSQLStorage:
         INSERT one HTTP request entry and immediately enforce the ring-buffer cap
         by deleting any rows beyond ``request_max_entries`` (oldest first).
         Both operations run inside a single transaction.
+
+        When ``config.request_buffer_size > 0`` the entry is appended to an
+        in-memory buffer and the actual INSERT is deferred to the worker's
+        next call to :meth:`flush_request_buffer`. The hot path then never
+        touches the database.
         """
         if not self._config.track_requests:
+            return
+        # ── Buffered fast-path ─────────────────────────────────────────
+        buf_size = int(getattr(self._config, "request_buffer_size", 0) or 0)
+        if buf_size > 0:
+            try:
+                self._req_buffer.append(entry_dict)
+                if len(self._req_buffer) >= buf_size:
+                    await self.flush_request_buffer()
+            except Exception:  # noqa: BLE001
+                pass
             return
         try:
             pool = await self._ensure_pool()
@@ -509,6 +535,87 @@ class PostgreSQLStorage:
                     )
         except Exception:  # noqa: BLE001
             pass
+
+    async def flush_request_buffer(self) -> int:
+        """Drain ``self._req_buffer`` with a single executemany INSERT."""
+        if not self._req_buffer:
+            return 0
+        # Snapshot under no lock — single-loop ordering keeps appends serial
+        # enough for our needs; worst case we lose one entry in a crash.
+        pending = self._req_buffer
+        self._req_buffer = []
+        try:
+            pool = await self._ensure_pool()
+
+            rows = []
+            for entry in pending:
+                ts_raw = entry.get("timestamp")
+                if isinstance(ts_raw, str):
+                    try:
+                        ts = datetime.fromisoformat(ts_raw)
+                    except ValueError:
+                        ts = datetime.now(tz=timezone.utc)
+                elif isinstance(ts_raw, datetime):
+                    ts = ts_raw
+                else:
+                    ts = datetime.now(tz=timezone.utc)
+
+                headers = entry.get("request_headers")
+                body = entry.get("request_body")
+                resp = entry.get("response_body")
+                headers_val = json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else None
+                body_val = json.dumps(body, default=str) if isinstance(body, (dict, list)) else None
+                resp_val = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else None
+                if resp_val is None and isinstance(resp, str) and resp:
+                    resp_val = json.dumps(resp)
+
+                rows.append((
+                    ts,
+                    entry.get("method", "GET"),
+                    entry.get("path", "/"),
+                    entry.get("status_code", 200),
+                    entry.get("duration_ms"),
+                    entry.get("request_id"),
+                    entry.get("ip_address"),
+                    entry.get("user_agent"),
+                    headers_val,
+                    body_val,
+                    resp_val,
+                    entry.get("error_id"),
+                ))
+
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.executemany(
+                        f"""
+                        INSERT INTO {self._requests_table} (
+                            timestamp, method, path, status_code, duration_ms,
+                            request_id, ip_address, user_agent,
+                            request_headers, request_body, response_body, error_id
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8,
+                            $9::jsonb, $10::jsonb, $11::jsonb, $12
+                        )
+                        """,
+                        rows,
+                    )
+                    # Ring-buffer enforcement once after the batch
+                    await conn.execute(
+                        f"""
+                        DELETE FROM {self._requests_table}
+                        WHERE id NOT IN (
+                            SELECT id FROM {self._requests_table}
+                            ORDER BY timestamp DESC
+                            LIMIT $1
+                        )
+                        """,
+                        self._config.request_max_entries,
+                    )
+            return len(rows)
+        except Exception:  # noqa: BLE001
+            # Best-effort: drop the batch if we couldn't write it. Better
+            # than retaining stale rows in memory forever on a broken DB.
+            return 0
 
     async def list_requests(
         self,

@@ -133,6 +133,25 @@ class FlareConfig(BaseSettings):
     # Env: FLARE_CAPTURE_REQUEST_HEADERS=true
     capture_request_headers: bool = False
 
+    # ── Request tracking — batch insert (high throughput) ────────────────────
+    # When > 0, RequestTrackingMiddleware appends each entry to an in-memory
+    # buffer instead of issuing one INSERT per request. The worker flushes
+    # the buffer in a single multi-row INSERT (executemany) every
+    # ``request_buffer_flush_seconds`` or whenever the buffer reaches this
+    # size, whichever comes first.
+    #
+    # Trade-off: lower per-request latency (no DB hit on the hot path) at the
+    # cost of a small visibility lag — the dashboard's HTTP Requests tab will
+    # not see in-flight entries until the next flush.
+    #
+    # Default 0 = immediate write per request (safest for low-volume / dev).
+    # 100–500 is a good range for sustained >50 req/s deployments.
+    # Env: FLARE_REQUEST_BUFFER_SIZE
+    request_buffer_size: int = 0
+    # Maximum delay between buffer flushes when the size threshold isn't hit.
+    # Env: FLARE_REQUEST_BUFFER_FLUSH_SECONDS
+    request_buffer_flush_seconds: int = 2
+
     # ── Runtime — set by setup(), never from env ────────────────────────────────
     # The resolved storage instance; injected after make_storage() in setup().
     # Excluded from serialization and env-loading.

@@ -157,6 +157,9 @@ class SQLiteStorage:
         self._config = config
         self._db: Any = None
         self._last_retention_at: Optional[datetime] = None  # throttle for flush()  # aiosqlite.Connection, set on first use
+        # In-memory buffer drained by flush_request_buffer() when
+        # config.request_buffer_size > 0.
+        self._req_buffer: list[dict] = []
 
     # ── Lazy init ─────────────────────────────────────────────────────────
 
@@ -362,20 +365,100 @@ class SQLiteStorage:
 
     async def close(self) -> None:
         """Close the SQLite connection."""
+        # Drain any buffered request rows before closing the connection.
+        try:
+            if self._req_buffer:
+                await self.flush_request_buffer()
+        except Exception:
+            pass
         if self._db is not None:
             try:
                 await self._db.close()
             except Exception:
                 pass
             self._db = None
+
+    async def flush_request_buffer(self) -> int:
+        """Drain ``self._req_buffer`` with a single executemany INSERT."""
+        if not self._req_buffer:
+            return 0
+        pending = self._req_buffer
+        self._req_buffer = []
+        try:
+            db = await self._ensure_db()
+
+            rows = []
+            for entry in pending:
+                ts_raw = entry.get("timestamp")
+                if isinstance(ts_raw, datetime):
+                    ts = ts_raw.isoformat()
+                elif isinstance(ts_raw, str):
+                    ts = ts_raw
+                else:
+                    ts = datetime.now(tz=timezone.utc).isoformat()
+
+                headers = entry.get("request_headers")
+                body = entry.get("request_body")
+                resp = entry.get("response_body")
+                rows.append((
+                    ts,
+                    entry.get("method", "GET"),
+                    entry.get("path", "/"),
+                    entry.get("status_code", 200),
+                    entry.get("duration_ms"),
+                    entry.get("request_id"),
+                    entry.get("ip_address"),
+                    entry.get("user_agent"),
+                    json.dumps(headers, default=str) if isinstance(headers, (dict, list)) else headers,
+                    json.dumps(body, default=str) if isinstance(body, (dict, list)) else body,
+                    json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else resp,
+                    entry.get("error_id"),
+                ))
+
+            await db.executemany(
+                """
+                INSERT INTO requests (
+                    timestamp, method, path, status_code, duration_ms,
+                    request_id, ip_address, user_agent,
+                    request_headers, request_body, response_body, error_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            await db.execute(
+                """
+                DELETE FROM requests
+                WHERE id NOT IN (
+                    SELECT id FROM requests ORDER BY timestamp DESC LIMIT ?
+                )
+                """,
+                (self._config.request_max_entries,),
+            )
+            await db.commit()
+            return len(rows)
+        except Exception:
+            return 0
     # ── Request tracking ───────────────────────────────────────────────
 
     async def enqueue_request(self, entry_dict: dict) -> None:
         """
         INSERT one HTTP request entry and enforce the ring-buffer cap by
         deleting rows beyond ``request_max_entries`` in the same transaction.
+
+        When ``config.request_buffer_size > 0`` the entry is appended to an
+        in-memory buffer and the actual INSERT is deferred to the worker's
+        next call to :meth:`flush_request_buffer`.
         """
         if not self._config.track_requests:
+            return
+        buf_size = int(getattr(self._config, "request_buffer_size", 0) or 0)
+        if buf_size > 0:
+            try:
+                self._req_buffer.append(entry_dict)
+                if len(self._req_buffer) >= buf_size:
+                    await self.flush_request_buffer()
+            except Exception:  # noqa: BLE001
+                pass
             return
         try:
             db = await self._ensure_db()

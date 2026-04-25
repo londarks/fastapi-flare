@@ -153,6 +153,23 @@ class FlareStorageProtocol(Protocol):
         After INSERT, immediately deletes the oldest rows exceeding
         ``request_max_entries`` so the table stays bounded.
         Must NEVER raise — any failure is silently swallowed.
+
+        When ``config.request_buffer_size > 0`` the implementation may
+        append to an in-memory buffer and defer the actual INSERT to
+        :meth:`flush_request_buffer`.
+        """
+        ...
+
+    async def flush_request_buffer(self) -> int:
+        """
+        Persist any buffered request entries (when ``request_buffer_size > 0``).
+
+        Called periodically by the background worker. Returns the number of
+        rows flushed. Implementations should perform a single multi-row
+        INSERT to amortise per-request DB cost.
+
+        Must NEVER raise. When ``request_buffer_size == 0`` this is a no-op
+        and returns 0.
         """
         ...
 
