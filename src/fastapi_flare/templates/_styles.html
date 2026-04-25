@@ -27,7 +27,8 @@
       --mono:       'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
 
       /* ── Design tokens ───────────────────────────────────────────────── */
-      --sidebar-w:   220px;
+      --sidebar-w:   56px;          /* icon-only rail (hover-expands below) */
+      --sidebar-w-open: 220px;      /* expanded width on hover              */
       /* Radii */
       --r-sm:  6px;
       --r-md:  8px;
@@ -126,58 +127,74 @@
       padding: 2px 7px; border-radius: 4px;
     }
 
-    /* ── SIDEBAR ── */
+    /* ── SIDEBAR (icon-only rail that expands on hover) ── */
     .sidebar {
-      position: fixed; top: 52px; left: 0; bottom: 0; width: var(--sidebar-w);
+      position: fixed; top: 52px; left: 0; bottom: 0;
+      width: var(--sidebar-w);
       background: var(--bg-card);
       border-right: 1px solid var(--border);
       display: flex; flex-direction: column; z-index: 90;
-      padding: 14px 10px;
-      transition: transform var(--t-slow) var(--ease);
+      padding: 10px 8px;
+      transition: width var(--t-base) var(--ease-out);
       overflow: hidden;
+    }
+    /* Expand on hover (desktop). Overlays main content without reflow. */
+    @media (hover: hover) {
+      .sidebar:hover { width: var(--sidebar-w-open); box-shadow: var(--shadow-lg); }
     }
     .sidebar.collapsed { transform: translateX(calc(-1 * var(--sidebar-w))); }
     .sidebar-section-label {
       font-size: 10px; font-weight: 600; color: var(--gray);
       text-transform: uppercase; letter-spacing: 0.9px;
-      padding: 10px 12px 8px; margin: 0;
+      padding: 12px 12px 6px; margin: 0;
+      opacity: 0; transition: opacity var(--t-base) var(--ease);
+      white-space: nowrap; overflow: hidden;
     }
-    .sidebar-nav { display: flex; flex-direction: column; gap: 1px; }
+    .sidebar:hover .sidebar-section-label { opacity: 1; }
+    .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
     .nav-item {
       position: relative;
-      display: flex; align-items: center; gap: 10px;
-      padding: 7px 12px; border-radius: var(--r-md);
+      display: flex; align-items: center; gap: 12px;
+      padding: 9px 10px; border-radius: var(--r-md);
       font-size: 13px; font-weight: 500;
       text-decoration: none; color: var(--gray-light);
       transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+      white-space: nowrap; overflow: hidden;
+      height: 36px;
     }
     .nav-item i {
-      font-size: 13px; width: 16px; text-align: center; flex-shrink: 0;
+      font-size: 15px;
+      width: 22px; text-align: center; flex-shrink: 0;
       color: var(--gray); transition: color var(--t-fast) var(--ease);
     }
+    .nav-item span {
+      opacity: 0; transition: opacity var(--t-base) var(--ease);
+      flex: 1 1 auto; min-width: 0;
+    }
+    .sidebar:hover .nav-item span { opacity: 1; }
     .nav-item:hover { color: var(--white); background: rgba(255,255,255,0.025); }
     .nav-item:hover i { color: var(--gray-light); }
-    .nav-item.active {
-      color: var(--white); background: var(--bg-hover);
-      box-shadow: inset 0 0 0 1px var(--border);
-    }
+    .nav-item.active { color: var(--white); background: var(--bg-hover); }
     .nav-item.active i { color: var(--red); }
     .nav-item.active::before {
-      content: ''; position: absolute; left: -10px; top: 50%;
-      width: 3px; height: 16px; transform: translateY(-50%);
+      content: ''; position: absolute; left: -8px; top: 50%;
+      width: 3px; height: 18px; transform: translateY(-50%);
       background: var(--red); border-radius: 0 2px 2px 0;
+      box-shadow: 0 0 8px rgba(239,68,68,0.4);
     }
     .sidebar-footer {
-      margin-top: auto; padding: 12px 10px 4px;
+      margin-top: auto; padding: 12px 8px 4px;
       border-top: 1px solid var(--border);
-      display: flex; align-items: center; gap: 6px;
-      white-space: nowrap;
+      display: flex; align-items: center; gap: 8px;
+      white-space: nowrap; overflow: hidden;
     }
-    .sidebar-footer i { font-size: 11px; color: var(--red); }
+    .sidebar-footer i { font-size: 12px; color: var(--red); flex-shrink: 0; width: 22px; text-align: center; }
     .sidebar-footer span {
       font-size: 10px; color: var(--gray);
       letter-spacing: .3px; font-family: var(--mono);
+      opacity: 0; transition: opacity var(--t-base) var(--ease);
     }
+    .sidebar:hover .sidebar-footer span { opacity: 1; }
 
     /* ── SIDEBAR TOGGLE ── */
     .sidebar-toggle {
@@ -202,12 +219,11 @@
     /* ── MAIN ── */
     main {
       margin-top: 52px; margin-left: var(--sidebar-w);
-      padding: 28px 32px 48px;
-      transition: margin-left var(--t-slow) var(--ease);
+      padding: 24px 28px 40px;
       min-height: calc(100vh - 52px);
-      max-width: 1400px;
     }
     body.sidebar-collapsed main { margin-left: 0; }
+    body.sidebar-collapsed .sidebar { transform: translateX(calc(-1 * var(--sidebar-w))); }
 
     /* ── STATS ── */
     .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px; }
@@ -456,27 +472,27 @@
     }
     .pg-btn:disabled { opacity: .35; cursor: not-allowed; }
 
-    /* ── MODAL ── */
+    /* ── DETAIL PANEL (right drawer; .modal-overlay / .modal kept for backward compat) ── */
     .modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,.72);
-      z-index: 200; display: flex; align-items: center; justify-content: center;
-      padding: 20px;
-      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-      opacity: 0; pointer-events: none;
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, .4);
+      z-index: 200;
+      pointer-events: none;
+      opacity: 0;
       transition: opacity var(--t-base) var(--ease);
     }
     .modal-overlay.open { opacity: 1; pointer-events: all; }
     .modal {
+      position: absolute; top: 0; right: 0; bottom: 0;
+      width: 100%; max-width: 620px;
       background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--r-xl);
-      width: 100%; max-width: 880px; max-height: 90vh;
-      overflow: hidden; display: flex; flex-direction: column;
-      transform: translateY(12px) scale(0.985);
-      transition: transform var(--t-base) var(--ease-out);
-      box-shadow: var(--shadow-xl);
+      border-left: 1px solid var(--border);
+      box-shadow: -16px 0 48px rgba(0,0,0,0.5);
+      display: flex; flex-direction: column;
+      transform: translateX(100%);
+      transition: transform var(--t-slow) var(--ease-out);
     }
-    .modal-overlay.open .modal { transform: translateY(0) scale(1); }
+    .modal-overlay.open .modal { transform: translateX(0); }
     .modal-head {
       padding: 14px 18px; border-bottom: 1px solid var(--border);
       display: flex; align-items: center; gap: 10px;
