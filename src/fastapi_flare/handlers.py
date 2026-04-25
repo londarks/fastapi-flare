@@ -27,6 +27,21 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
+def _endpoint(request: Request) -> str:
+    """Return the matched route template (e.g. ``/items/{id}``) when available,
+    falling back to the literal request path.
+
+    Using the template here lets the issue-fingerprint collapse all UUID
+    variations of the same endpoint into a single issue, instead of producing
+    one row per concrete path. The literal URL is still preserved on the
+    request entry in ``flare_requests`` for drill-down.
+    """
+    route = request.scope.get("route")
+    if route is not None and getattr(route, "path", None):
+        return route.path
+    return request.url.path
+
+
 def _capture_response_payload(
     config: "FlareConfig", status_code: int, payload: Any
 ) -> Any:
@@ -114,7 +129,7 @@ def make_http_exception_handler(config: "FlareConfig"):
                 event="http_exception",
                 message=str(exc.detail),
                 request_id=getattr(request.state, "request_id", None),
-                endpoint=request.url.path,
+                endpoint=_endpoint(request),
                 http_method=request.method,
                 http_status=exc.status_code,
                 ip_address=_client_ip(request),
@@ -149,7 +164,7 @@ def make_generic_exception_handler(config: "FlareConfig"):
             event="unhandled_exception",
             message=str(exc),
             request_id=getattr(request.state, "request_id", None),
-            endpoint=request.url.path,
+            endpoint=_endpoint(request),
             http_method=request.method,
             http_status=500,
             ip_address=_client_ip(request),
@@ -207,7 +222,7 @@ def make_validation_exception_handler(config: "FlareConfig"):
             event="validation_error",
             message=first_msg,
             request_id=getattr(request.state, "request_id", None),
-            endpoint=request.url.path,
+            endpoint=_endpoint(request),
             http_method=request.method,
             http_status=422,
             ip_address=_client_ip(request),
