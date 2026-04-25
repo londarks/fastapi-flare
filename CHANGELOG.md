@@ -5,6 +5,67 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-04-24
+
+### Added — Response body capture
+Opt-in snapshot of what the endpoint responded with, so observability covers
+both sides of a request. Default stays off to avoid privacy/volume surprises.
+
+- `capture_response_body: bool = False` — master switch
+- `capture_response_body_min_status: int = 400` — errors-only by default
+- `max_response_body_bytes: int = 8192` — truncation cap
+- `response_body_retention_hours: int = 24` — auto null-out TTL (row stays for
+  metrics, only the payload is cleared)
+- New `response_body` column on `flare_logs` and `flare_requests`. Idempotent
+  migrations on both PG (`ADD COLUMN IF NOT EXISTS`) and SQLite (try/except
+  `ALTER TABLE`). Existing deployments get the column on next start.
+- `FlareLogEntry` and `FlareRequestEntry` schemas gained `response_body`.
+- Capture respects `sensitive_fields` — values at matching keys are redacted
+  before storage.
+- Binary / streaming content-types skipped (`image/*`, `video/*`, `audio/*`,
+  `application/octet-stream`, `application/pdf`, `application/zip`,
+  `application/x-*`, `text/event-stream`, `multipart/*`).
+- Streaming response bytes still reach the client intact (buffering was
+  already inherent to `BaseHTTPMiddleware`; rebuild preserves the bytes).
+- Dashboard modals (Errors / Issues / Requests) gained a "Response Body"
+  section mirroring Request Body.
+- 10 new tests under `tests/test_response_body.py`.
+
+### Changed — RequestTrackingMiddleware awaits `enqueue_request` inline
+Dropped the `asyncio.create_task` fire-and-forget in favour of `await`.
+Adds 1–2 ms per request on SQLite, negligible on PostgreSQL, and eliminates
+a race that lost rows under `TestClient`'s sub-loop model. `enqueue_request`
+continues to swallow its own errors so the request path stays non-raising.
+
+### Changed — UI / Design pass
+Significant polish across the dashboard templates. Markup unchanged, only
+`_styles.html` and `layout.html`.
+
+- **Layout refactor**: sidebar collapsed to a 56px icon-only rail that
+  expands to 220px on hover (overlay — no main-content reflow). Drill-down
+  modal docks as a right-edge drawer (slide-in) instead of a centred card;
+  the table behind stays visible so entry-to-entry browsing feels natural.
+- **Palette**: final pass on neutral darks (`#09090b` / `#0f0f11` /
+  `#131316`). Semantic red (`#ef4444`) reserved for ERROR, brand flame, and
+  active indicators. Cool zinc grays replace warm beige tokens that
+  DarkReader was mangling to cream.
+- **DarkReader opt-out**: added `<meta name="color-scheme" content="dark">`
+  and `<meta name="darkreader-lock">` to `layout.html` so the extension
+  leaves our already-dark page alone.
+- **Design tokens**: centralised radii (`--r-sm/md/lg/xl`), shadows
+  (`--shadow-sm/md/lg/xl`), motion (`--ease`, `--ease-out`, `--t-fast/base/slow`),
+  and focus rings (`--ring`).
+- **Typography**: Inter stylistic alternates (cv02/03/04/11), tabular
+  numerals on stats/timestamps, consistent 1.5 line-height baseline.
+- **Focus rings** visible on all interactive elements via `:focus-visible`.
+- **Sticky table headers** — `thead` stays pinned while scrolling long lists.
+- **Cards** (stats, table, filters) use a top gradient line for depth
+  instead of heavy left-stripes.
+- **Animations**: subtle fade-up on main children at first paint (staggered
+  40ms), smoother modal open timing.
+- **Smaller header** (52px), refined pagination (ghost buttons), nicer
+  empty states, `<kbd>` styling prepared for future shortcut hints.
+
 ## [0.3.4] — 2026-04-24
 
 ### Changed — tone down the Errors table
@@ -178,6 +239,7 @@ See `git log` for the historical series covering initial release, Zitadel
 OAuth2 setup (bearer + browser PKCE), dashboard layout, metrics tab, and
 the request-body capture fix (`BodyCacheMiddleware`).
 
+[0.4.0]: https://github.com/londarks/fastapi-flare/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/londarks/fastapi-flare/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/londarks/fastapi-flare/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/londarks/fastapi-flare/compare/v0.3.1...v0.3.2
