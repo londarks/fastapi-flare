@@ -5,6 +5,32 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-05
+
+### Fixed — PostgreSQL pool resilience & benign asyncio noise
+Stops the recurring `Future exception was never retrieved` log spam reported in
+production with `storage_backend="postgresql"` + `capture_asyncio_errors=True`.
+
+- The asyncpg pool now recycles idle connections via
+  `max_inactive_connection_lifetime` (default 180s) before a server / PgBouncer /
+  load-balancer idle timeout can drop them underneath the pool — the root cause
+  of `ConnectionDoesNotExistError: connection was closed in the middle of
+  operation`.
+- The asyncio loop exception handler installed by `capture_asyncio_errors` now
+  drops benign transient noise — `asyncio.CancelledError` and asyncpg
+  connection-drop errors — instead of forwarding it to storage and re-logging it.
+  This also breaks the feedback loop where, with `capture_logging` on the root
+  logger, the default handler's log record was re-ingested into the same storage
+  that produced the error.
+
+### Added — Configurable PostgreSQL connection pool
+Previously only `pg_dsn` and `pg_table_name` were exposed.
+
+- `pg_pool_min_size: int = 1`
+- `pg_pool_max_size: int = 10`
+- `pg_max_inactive_connection_lifetime: float = 180.0` (0 disables recycling)
+- `pg_command_timeout: int = 30`
+
 ## [0.4.0] — 2026-04-24
 
 ### Added — Response body capture
