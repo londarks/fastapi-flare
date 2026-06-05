@@ -7,8 +7,11 @@ by a PostgreSQL database using ``asyncpg`` for non-blocking async I/O.
 
 Design decisions
 ----------------
-* **Connection pool** — ``asyncpg.create_pool()`` is used (min=1, max=10) so
-  concurrent requests never queue waiting for a single connection.
+* **Connection pool** — ``asyncpg.create_pool()`` is used (sizing and idle
+  recycling are configurable via ``FlareConfig.pg_pool_*`` /
+  ``pg_max_inactive_connection_lifetime``) so concurrent requests never queue
+  waiting for a single connection, and idle connections are recycled before a
+  server / proxy idle timeout can drop them underneath the pool.
 * **Direct writes** — ``enqueue()`` performs an immediate INSERT.  No separate
   buffer or drain step is needed (unlike the former Redis List approach).
 * **Lazy init** — the pool and DDL migrations run on the first operation so
@@ -239,12 +242,22 @@ class PostgreSQLStorage:
                 "Install it with: pip install asyncpg"
             ) from exc
 
-        self._pool = await asyncpg.create_pool(
-            dsn=self._config.pg_dsn,
-            min_size=1,
-            max_size=10,
-            command_timeout=30,
+        config = self._config
+        # max_inactive_connection_lifetime recycles idle connections before the
+        # server / PgBouncer / load balancer drops them underneath the pool,
+        # which is what produces ConnectionDoesNotExistError ("connection was
+        # closed in the middle of operation"). 0 disables proactive recycling.
+        kwargs: dict[str, Any] = dict(
+            dsn=config.pg_dsn,
+            min_size=config.pg_pool_min_size,
+            max_size=config.pg_pool_max_size,
+            command_timeout=config.pg_command_timeout,
         )
+        lifetime = getattr(config, "pg_max_inactive_connection_lifetime", 180.0)
+        if lifetime and lifetime > 0:
+            kwargs["max_inactive_connection_lifetime"] = lifetime
+
+        self._pool = await asyncpg.create_pool(**kwargs)
 
         async with self._pool.acquire() as conn:
             await conn.execute(_build_ddl(self._table))

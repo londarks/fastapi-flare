@@ -256,6 +256,16 @@ def install_asyncio_capture(config: "FlareConfig") -> None:
     previous = loop.get_exception_handler()
 
     def _handler(_loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        message = context.get("message") or (str(exc) if exc else "")
+        # Transient event-loop noise (task cancellation during shutdown,
+        # connections dropped underneath a pool) is not actionable. Drop it
+        # entirely: do NOT forward it to storage and do NOT let the default
+        # handler log it — otherwise, with ``capture_logging`` attached to the
+        # root logger, that log record gets re-ingested into the same storage
+        # that emitted the error, creating a self-amplifying feedback loop.
+        if _is_benign_loop_noise(exc, message):
+            return
         try:
             _forward_asyncio_context(config, context)
         finally:
@@ -268,6 +278,37 @@ def install_asyncio_capture(config: "FlareConfig") -> None:
                 _loop.default_exception_handler(context)
 
     loop.set_exception_handler(_handler)
+
+
+def _is_benign_loop_noise(exc: Optional[BaseException], message: str) -> bool:
+    """Return True for transient event-loop errors that are not actionable.
+
+    Covers two recurring sources of ``Future exception was never retrieved``
+    spam that tell an operator nothing:
+
+    * :class:`asyncio.CancelledError` — normal task teardown during shutdown
+      or cancellation.
+    * asyncpg ``ConnectionDoesNotExistError`` / ``InterfaceError`` raised when
+      PostgreSQL, PgBouncer, or a load balancer closes a pooled connection
+      while it is idle or mid-operation ("connection was closed in the middle
+      of operation").
+
+    asyncpg exception classes are matched by name and message rather than via
+    ``isinstance`` so this stays import-free when the PostgreSQL backend isn't
+    installed.
+    """
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+
+    exc_name = type(exc).__name__ if exc is not None else ""
+    if exc_name in ("ConnectionDoesNotExistError", "ConnectionResetError"):
+        return True
+
+    haystack = f"{message} {exc or ''}".lower()
+    if "connection was closed in the middle of operation" in haystack:
+        return True
+
+    return False
 
 
 def _forward_asyncio_context(config: "FlareConfig", context: dict) -> None:

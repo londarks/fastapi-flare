@@ -133,6 +133,21 @@ FLARE_PG_DSN=postgresql://user:password@localhost:5432/mydb
 
 The table `flare_logs` (or your custom name) is created automatically on first connection.
 
+**Connection pool tuning** — the pool is configurable to match your infrastructure
+(workers, PgBouncer pool mode, server `max_connections`). Idle connections are
+recycled before a server / proxy idle timeout can drop them underneath the pool,
+which otherwise surfaces as `ConnectionDoesNotExistError: connection was closed in
+the middle of operation`:
+
+```bash
+FLARE_PG_POOL_MIN_SIZE=1
+FLARE_PG_POOL_MAX_SIZE=10
+# Keep BELOW your PostgreSQL / PgBouncer / load-balancer idle timeout (seconds).
+# Default 180. Set to 0 to disable proactive recycling.
+FLARE_PG_MAX_INACTIVE_CONNECTION_LIFETIME=180
+FLARE_PG_COMMAND_TIMEOUT=30
+```
+
 ---
 
 ## Multi-Project Isolation

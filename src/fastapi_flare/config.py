@@ -58,6 +58,25 @@ class FlareConfig(BaseSettings):
     # Only alphanumeric characters and underscores are allowed.
     pg_table_name: str = "flare_logs"
 
+    # ── PostgreSQL connection pool ───────────────────────────────────────────
+    # asyncpg pool sizing. Tune to your infrastructure (number of workers,
+    # PgBouncer pool mode, server max_connections).
+    # Env: FLARE_PG_POOL_MIN_SIZE / FLARE_PG_POOL_MAX_SIZE
+    pg_pool_min_size: int = 1
+    pg_pool_max_size: int = 10
+    # Seconds a pooled connection may sit idle before asyncpg closes and
+    # transparently replaces it. Keep this BELOW your PostgreSQL / PgBouncer /
+    # load-balancer idle timeout so the pool never hands out a connection the
+    # server has already dropped — the root cause of ConnectionDoesNotExistError
+    # ("connection was closed in the middle of operation"). asyncpg's own
+    # default is 300s; we lower it to 180s to stay under common 5-minute proxy
+    # idle timeouts. Set to 0 to disable proactive recycling.
+    # Env: FLARE_PG_MAX_INACTIVE_CONNECTION_LIFETIME
+    pg_max_inactive_connection_lifetime: float = 180.0
+    # Per-command timeout (seconds) applied to pooled queries.
+    # Env: FLARE_PG_COMMAND_TIMEOUT
+    pg_command_timeout: int = 30
+
     # ── Metrics ──────────────────────────────────────────────────────────────
     # Maximum number of distinct endpoint keys held in the in-memory metrics
     # store. Once reached, new unknown endpoints are silently dropped to
