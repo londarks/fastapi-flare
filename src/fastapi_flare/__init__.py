@@ -114,7 +114,12 @@ __all__ = [
     "clear_jwks_cache",
     "ZitadelBrowserRedirect",
 ]
-__version__ = "0.5.0"
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("fastapi-flare")
+except Exception:  # package metadata unavailable (e.g. vendored source copy)
+    __version__ = "0.0.0"
 
 
 def setup(

@@ -49,6 +49,13 @@ from fastapi_flare.schema import (
 _TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
 _templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+try:
+    from importlib.metadata import version as _pkg_version
+
+    _templates.env.globals["flare_version"] = _pkg_version("fastapi-flare")
+except Exception:  # package metadata unavailable (e.g. vendored source copy)
+    _templates.env.globals["flare_version"] = ""
+
 
 def _load_safe(d: dict) -> dict:
     """Return *d* if it is a non-empty dict, otherwise an empty dict."""

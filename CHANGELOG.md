@@ -5,6 +5,20 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — package version in the dashboard sidebar
+The sidebar footer now shows the installed version next to the logo
+(`fastapi-flare v0.5.1`), so it's always clear which release a deployment is
+running.
+
+- Version is resolved once from the installed package metadata
+  (`importlib.metadata`) and exposed to all templates as the Jinja global
+  `flare_version`.
+- `fastapi_flare.__version__` now also derives from package metadata instead
+  of a hardcoded string (it had silently drifted to `0.5.0`), so it can never
+  fall out of sync with `pyproject.toml` again.
+
 ## [0.5.1] — 2026-07-06
 
 ### Fixed — 422 handler crashed on non-serializable validation errors
