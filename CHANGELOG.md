@@ -5,6 +5,20 @@ All notable changes to **fastapi-flare** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-07-06
+
+### Fixed — 422 handler crashed on non-serializable validation errors
+A `ValueError` raised inside a Pydantic v2 `field_validator` is embedded as a
+raw exception object in the error's `ctx` (`{'ctx': {'error': ValueError(...)}}`).
+The validation exception handler passed `exc.errors()` straight to
+`JSONResponse` → `json.dumps` raised `TypeError` and the client received a 500
+instead of the intended 422 with the validation message.
+
+- Errors are now sanitized with `jsonable_encoder` (matching FastAPI's default
+  handler), with exceptions in `ctx` rendered as their string message — both in
+  the HTTP response and in the payload sent to `push_log`.
+- Regression tests in `tests/test_validation_handler.py`.
+
 ## [0.5.0] — 2026-06-05
 
 ### Fixed — PostgreSQL pool resilience & benign asyncio noise

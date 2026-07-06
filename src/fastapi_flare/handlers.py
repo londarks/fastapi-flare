@@ -7,6 +7,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -192,7 +193,9 @@ def make_validation_exception_handler(config: "FlareConfig"):
     async def handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         from fastapi_flare.queue import push_log
 
-        errors = exc.errors()
+        # Pydantic v2 embeds the raw exception object in ctx (e.g. a ValueError
+        # raised inside a field_validator), which json.dumps cannot serialize.
+        errors = jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
         # Build a concise human-readable error string
         parts = []
         for e in errors:
